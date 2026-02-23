@@ -178,6 +178,10 @@ async function runTask(
 }
 
 let schedulerRunning = false;
+// Track tasks currently in-flight to prevent the scheduler from
+// re-enqueuing them on subsequent polls (next_run is only updated
+// after the task completes, which can take minutes).
+const runningTasks = new Set<string>();
 
 export function startSchedulerLoop(deps: SchedulerDependencies): void {
   if (schedulerRunning) {
@@ -190,8 +194,10 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
   const loop = async () => {
     try {
       const dueTasks = getDueTasks();
-      if (dueTasks.length > 0) {
-        logger.info({ count: dueTasks.length }, 'Found due tasks');
+      // Only log when there are genuinely new tasks to run
+      const newDueTasks = dueTasks.filter((t) => !runningTasks.has(t.id));
+      if (newDueTasks.length > 0) {
+        logger.info({ count: newDueTasks.length }, 'Found due tasks');
       }
 
       for (const task of dueTasks) {
@@ -201,10 +207,21 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
           continue;
         }
 
+        // Skip tasks already running — their next_run hasn't been
+        // updated yet because they haven't completed.
+        if (runningTasks.has(currentTask.id)) continue;
+
+        runningTasks.add(currentTask.id);
         deps.queue.enqueueTask(
           currentTask.chat_jid,
           currentTask.id,
-          () => runTask(currentTask, deps),
+          async () => {
+            try {
+              await runTask(currentTask, deps);
+            } finally {
+              runningTasks.delete(currentTask.id);
+            }
+          },
         );
       }
     } catch (err) {

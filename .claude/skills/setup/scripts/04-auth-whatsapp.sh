@@ -162,12 +162,16 @@ case "$METHOD" in
       });
     " >> "$LOG_FILE" 2>&1
 
-    # Open in browser (macOS)
+    # Open in browser (macOS / Windows)
     if command -v open >/dev/null 2>&1; then
       open "$PROJECT_ROOT/store/qr-auth.html"
       log "Opened QR auth page in browser"
+    elif command -v cmd.exe >/dev/null 2>&1; then
+      WIN_PATH=$(cygpath -w "$PROJECT_ROOT/store/qr-auth.html" 2>/dev/null || echo "$PROJECT_ROOT/store/qr-auth.html")
+      cmd.exe /c "start \"\" \"$WIN_PATH\"" 2>/dev/null
+      log "Opened QR auth page in browser (Windows)"
     else
-      log "WARNING: 'open' command not found, cannot open browser"
+      log "WARNING: Cannot open browser automatically. Open this file manually: $PROJECT_ROOT/store/qr-auth.html"
     fi
 
     # Poll for completion (120s, 2s intervals)

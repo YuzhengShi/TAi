@@ -2,11 +2,10 @@
  * NanoClaw Agent Runner
  * Runs inside a container, receives config via stdin, outputs result to stdout
  *
- * Input protocol:
- *   Stdin: Full ContainerInput JSON (read until EOF, like before)
- *   IPC:   Follow-up messages written as JSON files to /workspace/ipc/input/
- *          Files: {type:"message", text:"..."}.json — polled and consumed
- *          Sentinel: /workspace/ipc/input/_close — signals session end
+ * Input protocol (NDJSON on stdin):
+ *   Line 1: {<ContainerInput fields>}\n          — initial input
+ *   Line N: {"type":"message","text":"..."}\n    — follow-up messages
+ *   <EOF>                                        — close signal
  *
  * Stdout protocol:
  *   Each result is wrapped in OUTPUT_START_MARKER / OUTPUT_END_MARKER pairs.
@@ -54,9 +53,6 @@ interface SDKUserMessage {
   session_id: string;
 }
 
-const IPC_INPUT_DIR = '/workspace/ipc/input';
-const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
-const IPC_POLL_MS = 500;
 
 /**
  * Push-based async iterable for streaming user messages to the SDK.
@@ -94,14 +90,68 @@ class MessageStream {
   }
 }
 
-async function readStdin(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = '';
+/**
+ * Reads NDJSON lines from stdin, buffers them, supports blocking nextLine()
+ * and non-blocking drainBuffered().
+ */
+class StdinReader {
+  private buffer: string[] = [];
+  private partial = '';
+  private closed = false;
+  private waiting: (() => void) | null = null;
+
+  constructor() {
     process.stdin.setEncoding('utf8');
-    process.stdin.on('data', chunk => { data += chunk; });
-    process.stdin.on('end', () => resolve(data));
-    process.stdin.on('error', reject);
-  });
+
+    process.stdin.on('data', (chunk: string) => {
+      const parts = (this.partial + chunk).split('\n');
+      this.partial = parts.pop()!; // last element is incomplete or ''
+      for (const line of parts) {
+        if (line.length > 0) {
+          this.buffer.push(line);
+        }
+      }
+      this.waiting?.();
+    });
+
+    process.stdin.on('end', () => {
+      // flush any trailing partial line
+      if (this.partial.length > 0) {
+        this.buffer.push(this.partial);
+        this.partial = '';
+      }
+      this.closed = true;
+      this.waiting?.();
+    });
+
+    process.stdin.on('error', () => {
+      this.closed = true;
+      this.waiting?.();
+    });
+  }
+
+  /** Returns next buffered line or waits; returns null on EOF with empty buffer. */
+  async nextLine(): Promise<string | null> {
+    while (true) {
+      if (this.buffer.length > 0) {
+        return this.buffer.shift()!;
+      }
+      if (this.closed) return null;
+      await new Promise<void>(r => { this.waiting = r; });
+      this.waiting = null;
+    }
+  }
+
+  /** Returns all currently buffered lines (non-blocking). */
+  drainBuffered(): string[] {
+    const lines = this.buffer.splice(0);
+    return lines;
+  }
+
+  /** True when EOF received and buffer empty. */
+  get isClosed(): boolean {
+    return this.closed && this.buffer.length === 0;
+  }
 }
 
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -186,8 +236,14 @@ function createPreCompactHook(): HookCallback {
 
 // Secrets to strip from Bash tool subprocess environments.
 // These are needed by claude-code for API auth but should never
-// be visible to commands Kit runs.
-const SECRET_ENV_VARS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'];
+// be visible to commands the agent runs.
+const SECRET_ENV_VARS = [
+  'ANTHROPIC_API_KEY',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'AWS_ACCESS_KEY_ID',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SESSION_TOKEN',
+];
 
 function createSanitizeBashHook(): HookCallback {
   return async (input, _toolUseId, _context) => {
@@ -271,7 +327,7 @@ function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | nu
   lines.push('');
 
   for (const msg of messages) {
-    const sender = msg.role === 'user' ? 'User' : 'Andy';
+    const sender = msg.role === 'user' ? 'User' : 'TAi';
     const content = msg.content.length > 2000
       ? msg.content.slice(0, 2000) + '...'
       : msg.content;
@@ -282,76 +338,12 @@ function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | nu
   return lines.join('\n');
 }
 
-/**
- * Check for _close sentinel.
- */
-function shouldClose(): boolean {
-  if (fs.existsSync(IPC_INPUT_CLOSE_SENTINEL)) {
-    try { fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL); } catch { /* ignore */ }
-    return true;
-  }
-  return false;
-}
-
-/**
- * Drain all pending IPC input messages.
- * Returns messages found, or empty array.
- */
-function drainIpcInput(): string[] {
-  try {
-    fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
-    const files = fs.readdirSync(IPC_INPUT_DIR)
-      .filter(f => f.endsWith('.json'))
-      .sort();
-
-    const messages: string[] = [];
-    for (const file of files) {
-      const filePath = path.join(IPC_INPUT_DIR, file);
-      try {
-        const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-        fs.unlinkSync(filePath);
-        if (data.type === 'message' && data.text) {
-          messages.push(data.text);
-        }
-      } catch (err) {
-        log(`Failed to process input file ${file}: ${err instanceof Error ? err.message : String(err)}`);
-        try { fs.unlinkSync(filePath); } catch { /* ignore */ }
-      }
-    }
-    return messages;
-  } catch (err) {
-    log(`IPC drain error: ${err instanceof Error ? err.message : String(err)}`);
-    return [];
-  }
-}
-
-/**
- * Wait for a new IPC message or _close sentinel.
- * Returns the messages as a single string, or null if _close.
- */
-function waitForIpcMessage(): Promise<string | null> {
-  return new Promise((resolve) => {
-    const poll = () => {
-      if (shouldClose()) {
-        resolve(null);
-        return;
-      }
-      const messages = drainIpcInput();
-      if (messages.length > 0) {
-        resolve(messages.join('\n'));
-        return;
-      }
-      setTimeout(poll, IPC_POLL_MS);
-    };
-    poll();
-  });
-}
 
 /**
  * Run a single query and stream results via writeOutput.
  * Uses MessageStream (AsyncIterable) to keep isSingleUserTurn=false,
  * allowing agent teams subagents to run to completion.
- * Also pipes IPC messages into the stream during the query.
+ * Polls stdinReader's in-memory buffer for follow-up messages during the query.
  */
 async function runQuery(
   prompt: string,
@@ -359,31 +351,38 @@ async function runQuery(
   mcpServerPath: string,
   containerInput: ContainerInput,
   sdkEnv: Record<string, string | undefined>,
+  stdinReader: StdinReader,
   resumeAt?: string,
 ): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean }> {
   const stream = new MessageStream();
   stream.push(prompt);
 
-  // Poll IPC for follow-up messages and _close sentinel during the query
-  let ipcPolling = true;
+  // Poll stdin buffer for follow-up messages and EOF during the query
+  let stdinPumping = true;
   let closedDuringQuery = false;
-  const pollIpcDuringQuery = () => {
-    if (!ipcPolling) return;
-    if (shouldClose()) {
-      log('Close sentinel detected during query, ending stream');
+  const pollStdinDuringQuery = () => {
+    if (!stdinPumping) return;
+    if (stdinReader.isClosed) {
+      log('EOF detected during query, ending stream');
       closedDuringQuery = true;
       stream.end();
-      ipcPolling = false;
+      stdinPumping = false;
       return;
     }
-    const messages = drainIpcInput();
-    for (const text of messages) {
-      log(`Piping IPC message into active query (${text.length} chars)`);
-      stream.push(text);
+    for (const line of stdinReader.drainBuffered()) {
+      try {
+        const msg = JSON.parse(line);
+        if (msg.type === 'message' && msg.text) {
+          log(`Piping stdin message into active query (${msg.text.length} chars)`);
+          stream.push(msg.text);
+        }
+      } catch (err) {
+        log(`Failed to parse stdin line: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
-    setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
+    setTimeout(pollStdinDuringQuery, 100);
   };
-  setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
+  setTimeout(pollStdinDuringQuery, 100);
 
   let newSessionId: string | undefined;
   let lastAssistantUuid: string | undefined;
@@ -484,19 +483,22 @@ async function runQuery(
     }
   }
 
-  ipcPolling = false;
+  stdinPumping = false;
   log(`Query done. Messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}`);
   return { newSessionId, lastAssistantUuid, closedDuringQuery };
 }
 
 async function main(): Promise<void> {
+  const stdinReader = new StdinReader();
   let containerInput: ContainerInput;
 
   try {
-    const stdinData = await readStdin();
-    containerInput = JSON.parse(stdinData);
-    // Delete the temp file the entrypoint wrote — it contains secrets
-    try { fs.unlinkSync('/tmp/input.json'); } catch { /* may not exist */ }
+    const firstLine = await stdinReader.nextLine();
+    if (firstLine === null) {
+      writeOutput({ status: 'error', result: null, error: 'Empty stdin (no input received)' });
+      process.exit(1);
+    }
+    containerInput = JSON.parse(firstLine);
     log(`Received input for group: ${containerInput.groupFolder}`);
   } catch (err) {
     writeOutput({
@@ -518,29 +520,34 @@ async function main(): Promise<void> {
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
 
   let sessionId = containerInput.sessionId;
-  fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
 
-  // Clean up stale _close sentinel from previous container runs
-  try { fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL); } catch { /* ignore */ }
-
-  // Build initial prompt (drain any pending IPC messages too)
+  // Build initial prompt (drain any buffered stdin lines too)
   let prompt = containerInput.prompt;
   if (containerInput.isScheduledTask) {
     prompt = `[SCHEDULED TASK - The following message was sent automatically and is not coming directly from the user or group.]\n\n${prompt}`;
   }
-  const pending = drainIpcInput();
+  const pending = stdinReader.drainBuffered();
   if (pending.length > 0) {
-    log(`Draining ${pending.length} pending IPC messages into initial prompt`);
-    prompt += '\n' + pending.join('\n');
+    log(`Draining ${pending.length} buffered stdin messages into initial prompt`);
+    const texts: string[] = [];
+    for (const line of pending) {
+      try {
+        const msg = JSON.parse(line);
+        if (msg.type === 'message' && msg.text) texts.push(msg.text);
+      } catch { /* skip malformed lines */ }
+    }
+    if (texts.length > 0) {
+      prompt += '\n' + texts.join('\n');
+    }
   }
 
-  // Query loop: run query → wait for IPC message → run new query → repeat
+  // Query loop: run query → wait for stdin message → run new query → repeat
   let resumeAt: string | undefined;
   try {
     while (true) {
       log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
 
-      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
+      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, stdinReader, resumeAt);
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
       }
@@ -548,28 +555,39 @@ async function main(): Promise<void> {
         resumeAt = queryResult.lastAssistantUuid;
       }
 
-      // If _close was consumed during the query, exit immediately.
+      // If EOF was detected during the query, exit immediately.
       // Don't emit a session-update marker (it would reset the host's
-      // idle timer and cause a 30-min delay before the next _close).
+      // idle timer and cause a 30-min delay before the next close).
       if (queryResult.closedDuringQuery) {
-        log('Close sentinel consumed during query, exiting');
+        log('EOF consumed during query, exiting');
         break;
       }
 
       // Emit session update so host can track it
       writeOutput({ status: 'success', result: null, newSessionId: sessionId });
 
-      log('Query ended, waiting for next IPC message...');
+      log('Query ended, waiting for next stdin message...');
 
-      // Wait for the next message or _close sentinel
-      const nextMessage = await waitForIpcMessage();
-      if (nextMessage === null) {
-        log('Close sentinel received, exiting');
+      // Wait for the next message or EOF
+      const nextLine = await stdinReader.nextLine();
+      if (nextLine === null) {
+        log('EOF received, exiting');
         break;
       }
 
-      log(`Got new message (${nextMessage.length} chars), starting new query`);
-      prompt = nextMessage;
+      try {
+        const msg = JSON.parse(nextLine);
+        if (msg.type === 'message' && msg.text) {
+          log(`Got new message (${msg.text.length} chars), starting new query`);
+          prompt = msg.text;
+        } else {
+          log(`Unknown stdin message type: ${msg.type}, skipping`);
+          continue;
+        }
+      } catch (err) {
+        log(`Failed to parse stdin line: ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
     }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);

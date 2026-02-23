@@ -121,7 +121,7 @@ fi
 # Test
 TEST_OK="false"
 log "Testing container with echo command"
-TEST_OUTPUT=$(echo '{}' | $RUN_CMD run -i --rm --entrypoint /bin/echo "$IMAGE" "Container OK" 2>>"$LOG_FILE") || true
+TEST_OUTPUT=$(echo '{}' | MSYS_NO_PATHCONV=1 $RUN_CMD run -i --rm --entrypoint /bin/echo "$IMAGE" "Container OK" 2>>"$LOG_FILE") || true
 if echo "$TEST_OUTPUT" | grep -q "Container OK"; then
   TEST_OK="true"
   log "Container test passed"

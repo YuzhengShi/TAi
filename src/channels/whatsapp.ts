@@ -6,11 +6,14 @@ import makeWASocket, {
   Browsers,
   DisconnectReason,
   WASocket,
+  WAMessage,
+  downloadMediaMessage,
+  extractMessageContent,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
 
-import { ASSISTANT_HAS_OWN_NUMBER, ASSISTANT_NAME, STORE_DIR } from '../config.js';
+import { ASSISTANT_HAS_OWN_NUMBER, ASSISTANT_NAME, DATA_DIR, STORE_DIR } from '../config.js';
 import {
   getLastGroupSync,
   setLastGroupSync,
@@ -20,6 +23,13 @@ import { logger } from '../logger.js';
 import { Channel, OnInboundMessage, OnChatMetadata, RegisteredGroup } from '../types.js';
 
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_MEDIA_SIZE = 10 * 1024 * 1024; // 10 MB
+
+const SUPPORTED_MEDIA_TYPES = ['imageMessage', 'documentMessage', 'stickerMessage'] as const;
+const UNSUPPORTED_MEDIA_LABELS: Record<string, string> = {
+  audioMessage: 'Voice note — audio not yet supported',
+  videoMessage: 'Video — not yet supported',
+};
 
 export interface WhatsAppChannelOpts {
   onMessage: OnInboundMessage;
@@ -32,6 +42,7 @@ export class WhatsAppChannel implements Channel {
 
   private sock!: WASocket;
   private connected = false;
+  private reconnecting = false;
   private lidToPhoneMap: Record<string, string> = {};
   private outgoingQueue: Array<{ jid: string; text: string }> = [];
   private flushing = false;
@@ -50,6 +61,21 @@ export class WhatsAppChannel implements Channel {
   }
 
   private async connectInternal(onFirstOpen?: () => void): Promise<void> {
+    // Close previous socket before creating a new one to prevent
+    // multiple concurrent connections that conflict with each other
+    if (this.sock) {
+      try {
+        // Remove listeners BEFORE ending so the old socket's 'close' event
+        // doesn't trigger another reconnect cycle
+        this.sock.ev.removeAllListeners('connection.update');
+        this.sock.ev.removeAllListeners('creds.update');
+        this.sock.ev.removeAllListeners('messages.upsert');
+        this.sock.end(undefined);
+      } catch {
+        // ignore errors closing stale socket
+      }
+    }
+
     const authDir = path.join(STORE_DIR, 'auth');
     fs.mkdirSync(authDir, { recursive: true });
 
@@ -85,15 +111,30 @@ export class WhatsAppChannel implements Channel {
         logger.info({ reason, shouldReconnect, queuedMessages: this.outgoingQueue.length }, 'Connection closed');
 
         if (shouldReconnect) {
-          logger.info('Reconnecting...');
-          this.connectInternal().catch((err) => {
-            logger.error({ err }, 'Failed to reconnect, retrying in 5s');
-            setTimeout(() => {
-              this.connectInternal().catch((err2) => {
-                logger.error({ err: err2 }, 'Reconnection retry failed');
-              });
-            }, 5000);
-          });
+          // Guard against multiple concurrent reconnect attempts — each
+          // creates a new socket that conflicts with the others.
+          if (this.reconnecting) {
+            logger.debug('Reconnect already scheduled, skipping duplicate');
+            return;
+          }
+          this.reconnecting = true;
+
+          // Delay reconnect to let the old socket fully close on WhatsApp's
+          // servers. Conflict errors need a longer delay.
+          const isConflict = reason === DisconnectReason.connectionReplaced;
+          const delayMs = isConflict ? 5000 : 2000;
+          logger.info({ delayMs, isConflict }, 'Reconnecting...');
+          setTimeout(() => {
+            this.reconnecting = false;
+            this.connectInternal().catch((err) => {
+              logger.error({ err }, 'Failed to reconnect, retrying in 10s');
+              setTimeout(() => {
+                this.connectInternal().catch((err2) => {
+                  logger.error({ err: err2 }, 'Reconnection retry failed');
+                });
+              }, 10000);
+            });
+          }, delayMs);
         } else {
           logger.info('Logged out. Run /setup to re-authenticate.');
           process.exit(0);
@@ -164,12 +205,41 @@ export class WhatsAppChannel implements Channel {
         // Only deliver full message for registered groups
         const groups = this.opts.registeredGroups();
         if (groups[chatJid]) {
-          const content =
+          const group = groups[chatJid];
+          let content =
             msg.message?.conversation ||
             msg.message?.extendedTextMessage?.text ||
             msg.message?.imageMessage?.caption ||
             msg.message?.videoMessage?.caption ||
+            msg.message?.documentMessage?.caption ||
             '';
+
+          // Handle supported media (image, document, sticker)
+          const mediaPath = await this.downloadMedia(msg, group.folder);
+          if (mediaPath) {
+            const inner = extractMessageContent(msg.message);
+            let label = 'an image';
+            if (inner?.stickerMessage) label = 'a sticker';
+            else if (inner?.documentMessage) {
+              const mime = inner.documentMessage.mimetype || 'application/octet-stream';
+              label = `a document (${mime})`;
+            }
+            const mediaRef = `[User sent ${label}. Use your Read tool to view: ${mediaPath}]`;
+            content = content ? `${content}\n${mediaRef}` : mediaRef;
+          } else {
+            // Check for unsupported media types (audio, video)
+            const inner = extractMessageContent(msg.message);
+            if (inner) {
+              for (const [type, humanLabel] of Object.entries(UNSUPPORTED_MEDIA_LABELS)) {
+                if (inner[type as keyof typeof inner]) {
+                  const unsupportedRef = `[${humanLabel}]`;
+                  content = content ? `${content}\n${unsupportedRef}` : unsupportedRef;
+                  break;
+                }
+              }
+            }
+          }
+
           const sender = msg.key.participant || msg.key.remoteJid || '';
           const senderName = msg.pushName || sender.split('@')[0];
 
@@ -307,16 +377,86 @@ export class WhatsAppChannel implements Channel {
     return jid;
   }
 
+  private async downloadMedia(msg: WAMessage, groupFolder: string): Promise<string | null> {
+    try {
+      const inner = extractMessageContent(msg.message);
+      if (!inner) return null;
+
+      // Skip viewOnce messages (privacy)
+      if (msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2 || msg.message?.viewOnceMessageV2Extension) {
+        return null;
+      }
+
+      // Find which supported media type is present
+      const mediaType = SUPPORTED_MEDIA_TYPES.find((t) => inner[t]);
+      if (!mediaType) return null;
+
+      const mediaMsg = inner[mediaType] as Record<string, any>;
+
+      // Also check viewOnce flag on the media message itself
+      if (mediaMsg.viewOnce) return null;
+
+      // Check file size before downloading
+      const fileLength = Number(mediaMsg.fileLength || 0);
+      if (fileLength > MAX_MEDIA_SIZE) {
+        logger.warn({ fileLength, maxSize: MAX_MEDIA_SIZE }, 'Media too large, skipping download');
+        return null;
+      }
+
+      const buffer = await downloadMediaMessage(msg, 'buffer', {});
+      const ext = this.mimeToExtension(mediaMsg.mimetype, mediaType);
+      const filename = `${msg.key.id}.${ext}`;
+
+      const mediaDir = path.join(DATA_DIR, 'ipc', groupFolder, 'media');
+      fs.mkdirSync(mediaDir, { recursive: true });
+      fs.writeFileSync(path.join(mediaDir, filename), buffer as Buffer);
+
+      logger.info({ filename, groupFolder, size: (buffer as Buffer).length }, 'Media downloaded');
+      return `/workspace/ipc/media/${filename}`;
+    } catch (err) {
+      logger.warn({ err, msgId: msg.key.id }, 'Failed to download media');
+      return null;
+    }
+  }
+
+  private mimeToExtension(mime: string | undefined | null, mediaType: string): string {
+    const map: Record<string, string> = {
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'image/webp': 'webp',
+      'image/gif': 'gif',
+      'application/pdf': 'pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+      'application/msword': 'doc',
+      'application/vnd.ms-excel': 'xls',
+      'text/plain': 'txt',
+    };
+    if (mime && map[mime]) return map[mime];
+    // Fallback by media type
+    if (mediaType === 'imageMessage') return 'jpg';
+    if (mediaType === 'stickerMessage') return 'webp';
+    if (mediaType === 'documentMessage') return 'bin';
+    return 'bin';
+  }
+
   private async flushOutgoingQueue(): Promise<void> {
     if (this.flushing || this.outgoingQueue.length === 0) return;
     this.flushing = true;
     try {
       logger.info({ count: this.outgoingQueue.length }, 'Flushing outgoing message queue');
       while (this.outgoingQueue.length > 0) {
-        const item = this.outgoingQueue.shift()!;
-        // Send directly — queued items are already prefixed by sendMessage
-        await this.sock.sendMessage(item.jid, { text: item.text });
-        logger.info({ jid: item.jid, length: item.text.length }, 'Queued message sent');
+        const item = this.outgoingQueue[0];
+        try {
+          // Send directly — queued items are already prefixed by sendMessage
+          await this.sock.sendMessage(item.jid, { text: item.text });
+          this.outgoingQueue.shift(); // Only remove after successful send
+          logger.info({ jid: item.jid, length: item.text.length }, 'Queued message sent');
+        } catch (err) {
+          logger.warn({ jid: item.jid, err }, 'Failed to send queued message, will retry on next reconnect');
+          break; // Stop flushing — remaining items stay in queue
+        }
       }
     } finally {
       this.flushing = false;

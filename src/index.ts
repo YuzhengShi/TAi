@@ -1,6 +1,7 @@
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 import {
   ASSISTANT_NAME,
@@ -47,6 +48,29 @@ let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
+// Track messages piped to active containers (per group).
+// Prevents re-piping while ensuring processGroupMessages can
+// re-discover them if the container crashes without processing.
+let pipedUpTo: Record<string, string> = {};
+
+// --- Typing indicator management (shared between processGroupMessages and pipe path) ---
+const typingIntervals: Record<string, ReturnType<typeof setInterval>> = {};
+
+function startTypingIndicator(channel: Channel, chatJid: string): void {
+  channel.setTyping?.(chatJid, true);
+  if (typingIntervals[chatJid]) clearInterval(typingIntervals[chatJid]);
+  typingIntervals[chatJid] = setInterval(() => {
+    channel.setTyping?.(chatJid, true);
+  }, 20_000);
+}
+
+function stopTypingIndicator(channel: Channel, chatJid: string): void {
+  if (typingIntervals[chatJid]) {
+    clearInterval(typingIntervals[chatJid]);
+    delete typingIntervals[chatJid];
+  }
+  channel.setTyping?.(chatJid, false);
+}
 
 let whatsapp: WhatsAppChannel;
 const channels: Channel[] = [];
@@ -168,7 +192,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
-  await channel.setTyping?.(chatJid, true);
+  startTypingIndicator(channel, chatJid);
+
   let hadError = false;
   let outputSentToUser = false;
 
@@ -183,6 +208,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
       }
+      // Response sent — stop typing until a new message is piped
+      stopTypingIndicator(channel, chatJid);
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
     }
@@ -192,7 +219,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
   });
 
-  await channel.setTyping?.(chatJid, false);
+  stopTypingIndicator(channel, chatJid);
   if (idleTimer) clearTimeout(idleTimer);
 
   if (output === 'error' || hadError) {
@@ -200,14 +227,28 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     // the user got their response and re-processing would send duplicates.
     if (outputSentToUser) {
       logger.warn({ group: group.name }, 'Agent error after output was sent, skipping cursor rollback to prevent duplicates');
+      // Piped messages may not have been processed — leave cursor as-is
+      // so drainGroup can re-process them via a new container
+      delete pipedUpTo[chatJid];
       return true;
     }
     // Roll back cursor so retries can re-process these messages
     lastAgentTimestamp[chatJid] = previousCursor;
+    delete pipedUpTo[chatJid];
     saveState();
     logger.warn({ group: group.name }, 'Agent error, rolled back message cursor for retry');
     return false;
   }
+
+  // Advance cursor past messages piped to this container via sendMessage.
+  // Only done after successful completion — if the container crashed,
+  // the error paths above leave the cursor unchanged so piped messages
+  // get re-discovered by the next container.
+  if (pipedUpTo[chatJid] && pipedUpTo[chatJid] > (lastAgentTimestamp[chatJid] || '')) {
+    lastAgentTimestamp[chatJid] = pipedUpTo[chatJid];
+    saveState();
+  }
+  delete pipedUpTo[chatJid];
 
   return true;
 }
@@ -355,20 +396,29 @@ async function startMessageLoop(): Promise<void> {
           );
           const messagesToSend =
             allPending.length > 0 ? allPending : groupMessages;
-          const formatted = formatMessages(messagesToSend);
+
+          // Filter out messages already piped to the active container
+          const pipedTs = pipedUpTo[chatJid] || lastAgentTimestamp[chatJid] || '';
+          const unpiped = messagesToSend.filter(m => m.timestamp > pipedTs);
+          if (unpiped.length === 0) continue;
+
+          const formatted = formatMessages(unpiped);
 
           if (queue.sendMessage(chatJid, formatted)) {
             logger.debug(
-              { chatJid, count: messagesToSend.length },
+              { chatJid, count: unpiped.length },
               'Piped messages to active container',
             );
-            lastAgentTimestamp[chatJid] =
-              messagesToSend[messagesToSend.length - 1].timestamp;
-            saveState();
-            // Show typing indicator while the container processes the piped message
-            channel.setTyping?.(chatJid, true);
+            // Track piped messages to prevent re-piping, but DON'T advance
+            // lastAgentTimestamp — only processGroupMessages does that after
+            // confirmed processing. Ensures piped-but-unprocessed messages
+            // are re-discovered if the container crashes.
+            pipedUpTo[chatJid] = unpiped[unpiped.length - 1].timestamp;
+            // Restart typing indicator while the container processes the piped message
+            startTypingIndicator(channel, chatJid);
           } else {
-            // No active container — enqueue for a new one
+            // No active container — clear piped tracking and enqueue for a new one
+            delete pipedUpTo[chatJid];
             queue.enqueueMessageCheck(chatJid);
           }
         }
@@ -398,70 +448,50 @@ function recoverPendingMessages(): void {
   }
 }
 
-function ensureContainerSystemRunning(): void {
+function ensureDockerRunning(): void {
   try {
-    execSync('container system status', { stdio: 'pipe' });
-    logger.debug('Apple Container system already running');
+    execSync('docker info', { stdio: 'pipe', timeout: 10000 });
+    logger.debug('Docker daemon is running');
   } catch {
-    logger.info('Starting Apple Container system...');
-    try {
-      execSync('container system start', { stdio: 'pipe', timeout: 30000 });
-      logger.info('Apple Container system started');
-    } catch (err) {
-      logger.error({ err }, 'Failed to start Apple Container system');
-      console.error(
-        '\n╔════════════════════════════════════════════════════════════════╗',
-      );
-      console.error(
-        '║  FATAL: Apple Container system failed to start                 ║',
-      );
-      console.error(
-        '║                                                                ║',
-      );
-      console.error(
-        '║  Agents cannot run without Apple Container. To fix:           ║',
-      );
-      console.error(
-        '║  1. Install from: https://github.com/apple/container/releases ║',
-      );
-      console.error(
-        '║  2. Run: container system start                               ║',
-      );
-      console.error(
-        '║  3. Restart NanoClaw                                          ║',
-      );
-      console.error(
-        '╚════════════════════════════════════════════════════════════════╝\n',
-      );
-      throw new Error('Apple Container system is required but failed to start');
-    }
+    logger.error('Docker daemon is not running');
+    console.error('\n╔════════════════════════════════════════════════════════════════╗');
+    console.error('║  FATAL: Docker is not running                                  ║');
+    console.error('║                                                                ║');
+    console.error('║  Agents cannot run without Docker. To fix:                     ║');
+    console.error('║  macOS: Start Docker Desktop                                   ║');
+    console.error('║  Linux: sudo systemctl start docker                            ║');
+    console.error('║                                                                ║');
+    console.error('║  Install from: https://docker.com/products/docker-desktop      ║');
+    console.error('╚════════════════════════════════════════════════════════════════╝\n');
+    throw new Error('Docker is required but not running');
   }
+}
 
-  // Kill and clean up orphaned NanoClaw containers from previous runs
+/**
+ * Kill any leftover nanoclaw containers from previous sessions.
+ * Orphaned containers share the same IPC directory and steal messages
+ * meant for the current session's containers.
+ */
+function killStaleContainers(): void {
   try {
-    const output = execSync('container ls --format json', {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      encoding: 'utf-8',
-    });
-    const containers: { status: string; configuration: { id: string } }[] = JSON.parse(output || '[]');
-    const orphans = containers
-      .filter((c) => c.status === 'running' && c.configuration.id.startsWith('nanoclaw-'))
-      .map((c) => c.configuration.id);
-    for (const name of orphans) {
-      try {
-        execSync(`container stop ${name}`, { stdio: 'pipe' });
-      } catch { /* already stopped */ }
-    }
-    if (orphans.length > 0) {
-      logger.info({ count: orphans.length, names: orphans }, 'Stopped orphaned containers');
+    const result = execSync(
+      'docker ps -q --filter "name=nanoclaw-"',
+      { stdio: 'pipe', timeout: 10000 },
+    ).toString().trim();
+
+    if (result) {
+      const ids = result.split('\n').filter(Boolean);
+      logger.info({ count: ids.length }, 'Killing stale containers from previous sessions');
+      execSync(`docker rm -f ${ids.join(' ')}`, { stdio: 'pipe', timeout: 30000 });
     }
   } catch (err) {
-    logger.warn({ err }, 'Failed to clean up orphaned containers');
+    logger.warn({ err }, 'Failed to clean up stale containers');
   }
 }
 
 async function main(): Promise<void> {
-  ensureContainerSystemRunning();
+  ensureDockerRunning();
+  killStaleContainers();
   initDatabase();
   logger.info('Database initialized');
   loadState();
@@ -522,10 +552,13 @@ async function main(): Promise<void> {
   startMessageLoop();
 }
 
-// Guard: only run when executed directly, not when imported by tests
+// Guard: only run when executed directly, not when imported by tests.
+// On Windows, PM2 sets process.argv[1] to its own ProcessContainerFork.js,
+// so we also detect PM2 via NODE_APP_INSTANCE (set by all PM2 versions).
 const isDirectRun =
-  process.argv[1] &&
-  new URL(import.meta.url).pathname === new URL(`file://${process.argv[1]}`).pathname;
+  process.env.NODE_APP_INSTANCE !== undefined ||
+  (process.argv[1] != null &&
+    path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1]));
 
 if (isDirectRun) {
   main().catch((err) => {

@@ -33,3 +33,6 @@ groups/global/*
 .nanoclaw/
 
 agents-sdk-docs
+
+# Course materials (copyrighted, local only)
+cs6650-materials/
