@@ -1,197 +1,124 @@
-<p align="center">
-  <img src="assets/nanoclaw-logo.png" alt="NanoClaw" width="400">
-</p>
+# TAi — Teaching Assistant Intelligence
 
-<p align="center">
-  My personal Claude assistant that runs securely in containers. Lightweight and built to be understood and customized for your own needs.
-</p>
+An agentic AI Teaching Assistant for **CS6650 Building Scalable Distributed Systems** at Northeastern University Vancouver.
 
-<p align="center">
-  <a href="README_zh.md">中文</a>&nbsp; • &nbsp;
-  <a href="https://discord.gg/VDdww8qS42"><img src="https://img.shields.io/discord/1470188214710046894?label=Discord&logo=discord&v=2" alt="Discord" valign="middle"></a>&nbsp; • &nbsp;
-  <a href="repo-tokens"><img src="repo-tokens/badge.svg" alt="34.9k tokens, 17% of context window" valign="middle"></a>
-</p>
+Built on [NanoClaw](https://github.com/gavrielc/nanoclaw) (fork). Runs on AWS Bedrock. This is not a chatbot — it's an autonomous teaching agent that maintains graduated student models, discovers misconceptions organically, selects pedagogical strategies, and proactively intervenes.
 
-**New:** First AI assistant to support [Agent Swarms](https://code.claude.com/docs/en/agent-teams). Spin up teams of agents that collaborate in your chat.
+**Supervised by:** Professor Yvonne Coady
+**Developer:** Yuzheng Shi (MS CS, graduating Aug 2026)
 
-## Why I Built This
+## What Makes This Different
 
-[OpenClaw](https://github.com/openclaw/openclaw) is an impressive project with a great vision. But I can't sleep well running software I don't understand with access to my life. OpenClaw has 52+ modules, 8 config management files, 45+ dependencies, and abstractions for 15 channel providers. Security is application-level (allowlists, pairing codes) rather than OS isolation. Everything runs in one Node process with shared memory.
-
-NanoClaw gives you the same core functionality in a codebase you can understand in 8 minutes. One process. A handful of files. Agents run in actual Linux containers with filesystem isolation, not behind permission checks.
-
-## Quick Start
-
-```bash
-git clone https://github.com/gavrielc/nanoclaw.git
-cd nanoclaw
-claude
-```
-
-Then run `/setup`. Claude Code handles everything: dependencies, authentication, container setup, service configuration.
-
-## Philosophy
-
-**Small enough to understand.** One process, a few source files. No microservices, no message queues, no abstraction layers. Have Claude Code walk you through it.
-
-**Secure by isolation.** Agents run in Linux containers (Docker). They can only see what's explicitly mounted. Bash access is safe because commands run inside the container, not on your host.
-
-**Built for one user.** This isn't a framework. It's working software that fits my exact needs. You fork it and have Claude Code make it match your exact needs.
-
-**Customization = code changes.** No configuration sprawl. Want different behavior? Modify the code. The codebase is small enough that this is safe.
-
-**AI-native.** No installation wizard; Claude Code guides setup. No monitoring dashboard; ask Claude what's happening. No debugging tools; describe the problem, Claude fixes it.
-
-**Skills over features.** Contributors shouldn't add features (e.g. support for Telegram) to the codebase. Instead, they contribute [claude code skills](https://code.claude.com/docs/en/skills) like `/add-telegram` that transform your fork. You end up with clean code that does exactly what you need.
-
-**Best harness, best model.** This runs on Claude Agent SDK, which means you're running Claude Code directly. The harness matters. A bad harness makes even smart models seem dumb, a good harness gives them superpowers. Claude Code is (IMO) the best harness available.
-
-## What It Supports
-
-- **WhatsApp I/O** - Message Claude from your phone
-- **Isolated group context** - Each group has its own `CLAUDE.md` memory, isolated filesystem, and runs in its own container sandbox with only that filesystem mounted
-- **Main channel** - Your private channel (self-chat) for admin control; every other group is completely isolated
-- **Scheduled tasks** - Recurring jobs that run Claude and can message you back
-- **Web access** - Search and fetch content
-- **Container isolation** - Agents sandboxed in Docker containers (macOS/Linux)
-- **Agent Swarms** - Spin up teams of specialized agents that collaborate on complex tasks (first personal AI assistant to support this)
-- **Optional integrations** - Add Gmail (`/add-gmail`) and more via skills
-
-## Usage
-
-Talk to your assistant with the trigger word (default: `@Andy`):
-
-```
-@Andy send an overview of the sales pipeline every weekday morning at 9am (has access to my Obsidian vault folder)
-@Andy review the git history for the past week each Friday and update the README if there's drift
-@Andy every Monday at 8am, compile news on AI developments from Hacker News and TechCrunch and message me a briefing
-```
-
-From the main channel (your self-chat), you can manage groups and tasks:
-```
-@Andy list all scheduled tasks across groups
-@Andy pause the Monday briefing task
-@Andy join the Family Chat group
-```
-
-## Customizing
-
-There are no configuration files to learn. Just tell Claude Code what you want:
-
-- "Change the trigger word to @Bob"
-- "Remember in the future to make responses shorter and more direct"
-- "Add a custom greeting when I say good morning"
-- "Store conversation summaries weekly"
-
-Or run `/customize` for guided changes.
-
-The codebase is small enough that Claude can safely modify it.
-
-## Skills System CLI (Experimental)
-
-The new deterministic skills-system primitives are available as local commands:
-
-```bash
-npm run skills:init -- --core-version 0.5.0 --base-source .
-npm run skills:apply -- --skill whatsapp --version 1.2.0 --files-modified src/server.ts
-npm run skills:update-preview
-npm run skills:update-stage -- --target-core-version 0.6.0 --base-source /path/to/new/core
-npm run skills:update-commit
-# or: npm run skills:update-rollback
-```
-
-These commands operate on `.nanoclaw/state.yaml`, `.nanoclaw/state.next.yaml`, `.nanoclaw/base/`, `.nanoclaw/base.next/`, and `.nanoclaw/backup/`.
-
-## Contributing
-
-**Don't add features. Add skills.**
-
-If you want to add Telegram support, don't create a PR that adds Telegram alongside WhatsApp. Instead, contribute a skill file (`.claude/skills/add-telegram/SKILL.md`) that teaches Claude Code how to transform a NanoClaw installation to use Telegram.
-
-Users then run `/add-telegram` on their fork and get clean code that does exactly what they need, not a bloated system trying to support every use case.
-
-### RFS (Request for Skills)
-
-Skills we'd love to see:
-
-**Communication Channels**
-- `/add-telegram` - Add Telegram as channel. Should give the user option to replace WhatsApp or add as additional channel. Also should be possible to add it as a control channel (where it can trigger actions) or just a channel that can be used in actions triggered elsewhere
-- `/add-slack` - Add Slack
-- `/add-discord` - Add Discord
-
-**Platform Support**
-- `/setup-windows` - Windows via WSL2 + Docker
-
-**Session Management**
-- `/add-clear` - Add a `/clear` command that compacts the conversation (summarizes context while preserving critical information in the same session). Requires figuring out how to trigger compaction programmatically via the Claude Agent SDK.
-
-## Requirements
-
-- macOS or Linux
-- Node.js 20+
-- [Claude Code](https://claude.ai/download)
-- [Docker](https://docker.com/products/docker-desktop)
+| Chatbot | TAi |
+|---------|-----|
+| Answers when asked | Proactively reaches out when intervention is needed |
+| Treats every student the same | Maintains per-student competency model across 4 dimensions |
+| Generic responses from training data | Grounded in course materials via LeanRAG knowledge graph |
+| No memory between sessions | Persistent student model tracks mastery, misconceptions, verbal gaps |
+| Gives direct answers | Selects teaching strategy (Socratic, explain, challenge) based on student state |
 
 ## Architecture
 
 ```
-WhatsApp (baileys) --> SQLite --> Polling loop --> Container (Claude Agent SDK) --> Response
+WhatsApp → SQLite → Message Loop → Docker Container → Claude Agent SDK (Bedrock) → Response
+                                         ↓
+                              MCP Tools: send_message, schedule_task,
+                                         query_knowledge (LeanRAG),
+                                         update_competency
 ```
 
-Single Node.js process. Agents execute in isolated Linux containers with mounted directories. Per-group message queue with concurrency control. IPC via filesystem.
+Single Node.js process connecting WhatsApp (Baileys) to the Claude Agent SDK running in Docker containers. Each student group has an isolated filesystem and memory. Agents run on AWS Bedrock.
 
-Key files:
-- `src/index.ts` - Orchestrator: state, message loop, agent invocation
-- `src/channels/whatsapp.ts` - WhatsApp connection, auth, send/receive
-- `src/ipc.ts` - IPC watcher and task processing
-- `src/router.ts` - Message formatting and outbound routing
-- `src/group-queue.ts` - Per-group queue with global concurrency limit
-- `src/container-runner.ts` - Spawns streaming agent containers
-- `src/task-scheduler.ts` - Runs scheduled tasks
-- `src/db.ts` - SQLite operations (messages, groups, sessions, state)
-- `groups/*/CLAUDE.md` - Per-group memory
+### Model Strategy
 
-## FAQ
+| Role | Model | When |
+|------|-------|------|
+| Daily TA conversations | Claude Haiku 4.5 | 80%+ of interactions |
+| Complex reasoning / eval | Claude Sonnet 4 | Deep concepts, code review, Shadow Evaluator |
+| Voice interview | Nova Sonic | Mock interview sessions (Phase 3) |
+| Graph construction | DeepSeek V3.2 | Offline LeanRAG entity/relation extraction |
+| Embeddings | Cohere Embed v4 | LeanRAG entity anchoring + clustering |
 
-**Why WhatsApp and not Telegram/Signal/etc?**
+## Implementation Phases
 
-Because I use WhatsApp. Fork it and run a skill to change it. That's the whole point.
+### Phase 1: Agentic TA Core (Current)
 
-**Why Docker?**
+Transform chatbot into teaching agent using CLAUDE.md, COMPETENCY.md, and existing NanoClaw primitives. No new infrastructure.
 
-Docker provides cross-platform support (macOS and Linux), a large ecosystem, and mature tooling. Docker Desktop on macOS uses a lightweight Linux VM similar to other container solutions.
+- **Graduated Student Model** — Four-dimensional tracking per concept: confidence, stability, context scope, demonstrated via
+- **Emergent Misconception Discovery** — Misconceptions recorded organically from student interactions, never pre-loaded
+- **Teaching Strategy Selection** — Agent chooses approach (Socratic, explain, challenge, correct, mock practice) based on competency state
+- **Proactive Teaching Patrol** — Daily scheduled check: decides who needs intervention and why, 90% of patrols should result in "no action needed"
+- **Text-Based Mock Interviews** — Practice sessions targeting weak spots and verbal gaps from COMPETENCY.md
 
-**Can I run this on Linux?**
+### Phase 2: LeanRAG Knowledge Graph
 
-Yes. Run `/setup` and it will automatically configure Docker as the container runtime. Thanks to [@dotsetgreg](https://github.com/dotsetgreg) for contributing the `/convert-to-docker` skill.
+Give TAi structured course knowledge so answers are grounded in course materials, not just Claude's training data.
 
-**Is this secure?**
+- Offline graph construction from lecture slides, assignments, papers, and professor's notes
+- Query-time retrieval via embedding + graph traversal (zero LLM calls at query time)
+- Graph-informed teaching: mock interview questions from student's weak areas, prerequisite gap detection
 
-Agents run in containers, not behind application-level permission checks. They can only access explicitly mounted directories. You should still review what you're running, but the codebase is small enough that you actually can. See [docs/SECURITY.md](docs/SECURITY.md) for the full security model.
+### Phase 3: Voice Interview + Evaluation
 
-**Why no configuration files?**
+Real-time voice mock interviews with live evaluation.
 
-We don't want configuration sprawl. Every user should customize it to so that the code matches exactly what they want rather than configuring a generic system. If you like having config files, tell Claude to add them.
+- Nova Sonic voice interviews via web frontend
+- Shadow Evaluator (Claude Sonnet 4) scores each answer in real-time
+- Silence detection for academic integrity
+- Within-subject evaluation framework comparing agentic TA vs chatbot baseline
 
-**How do I debug issues?**
+## Key Files
 
-Ask Claude Code. "Why isn't the scheduler running?" "What's in the recent logs?" "Why did this message not get a response?" That's the AI-native approach.
+| File | Purpose |
+|------|---------|
+| `src/index.ts` | Orchestrator: state, message loop, agent invocation |
+| `src/channels/whatsapp.ts` | WhatsApp connection, auth, send/receive |
+| `src/container-runner.ts` | Spawns Docker containers with mounts |
+| `src/group-queue.ts` | Per-group queue with concurrency control |
+| `src/task-scheduler.ts` | Scheduled task execution |
+| `src/db.ts` | SQLite operations |
+| `container/agent-runner/src/index.ts` | Runs inside container, calls Claude Agent SDK |
+| `groups/global/CLAUDE.md` | TAi teaching persona + five-step reasoning loop |
+| `groups/{student}/CLAUDE.md` | Per-student agent instructions |
+| `groups/{student}/COMPETENCY.md` | Per-student graduated mastery tracking |
 
-**Why isn't the setup working for me?**
+## Getting Started
 
-I don't know. Run `claude`, then run `/debug`. If claude finds an issue that is likely affecting other users, open a PR to modify the setup SKILL.md.
+### Prerequisites
 
-**What changes will be accepted into the codebase?**
+- Node.js 20+
+- [Docker Desktop](https://docker.com/products/docker-desktop)
+- [Claude Code](https://claude.ai/download)
+- AWS credentials with Bedrock access
 
-Security fixes, bug fixes, and clear improvements to the base configuration. That's it.
+### Setup
 
-Everything else (new capabilities, OS compatibility, hardware support, enhancements) should be contributed as skills.
+```bash
+git clone https://github.com/YuzhengShi/TAi.git
+cd TAi
+npm install
+claude   # then run /setup
+```
 
-This keeps the base system minimal and lets every user customize their installation without inheriting features they don't want.
+### Development
 
-## Community
+```bash
+npm run dev          # Run with hot reload
+npm run build        # Compile TypeScript
+docker build -t nanoclaw-agent:latest ./container  # Rebuild agent container
+```
 
-Questions? Ideas? [Join the Discord](https://discord.gg/VDdww8qS42).
+## Course Context
+
+**CS6650 Building Scalable Distributed Systems**
+Weekly topics: Go/REST fundamentals, Docker/concurrency, Terraform/MapReduce, distributed systems, scalable service design, load testing, CAP theorem, async/serverless, Paxos/Raft, data storage tradeoffs.
+
+**Mock interviews are the core pedagogy** — weekly 1:1 where students explain code and concepts orally. TAi prepares students for these by targeting verbal gaps identified in the competency model.
+
+## Based On
+
+[NanoClaw](https://github.com/gavrielc/nanoclaw) — a lightweight personal Claude assistant that runs securely in containers. TAi extends it with teaching-specific behavior, AWS Bedrock integration, and the graduated student model.
 
 ## License
 
