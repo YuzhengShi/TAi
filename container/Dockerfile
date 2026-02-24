@@ -29,6 +29,15 @@ RUN apt-get update && apt-get install -y \
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
+# Install Python 3 + venv for LeanRAG MCP server
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/leanrag \
+    && /opt/leanrag/bin/pip install --no-cache-dir \
+        boto3 networkx numpy python-dotenv "mcp[cli]"
+
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code
 
@@ -48,7 +57,7 @@ COPY agent-runner/ ./
 RUN npm run build
 
 # Create workspace directories
-RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/messages /workspace/ipc/tasks
+RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/leanrag /workspace/ipc/messages /workspace/ipc/tasks
 
 # Create entrypoint script
 # Initial input + follow-up messages arrive via stdin (NDJSON protocol)

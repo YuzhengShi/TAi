@@ -171,6 +171,16 @@ function buildVolumeMounts(
     readonly: true,
   });
 
+  // LeanRAG knowledge graph (read-only, shared across all groups)
+  const leanragDir = path.join(projectRoot, 'leanrag');
+  if (fs.existsSync(path.join(leanragDir, 'graph.pkl'))) {
+    mounts.push({
+      hostPath: leanragDir,
+      containerPath: '/workspace/leanrag',
+      readonly: true,
+    });
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(

@@ -345,6 +345,46 @@ function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | nu
  * allowing agent teams subagents to run to completion.
  * Polls stdinReader's in-memory buffer for follow-up messages during the query.
  */
+function buildMcpServers(
+  mcpServerPath: string,
+  containerInput: ContainerInput,
+  sdkEnv: Record<string, string | undefined>,
+) {
+  const servers: Record<string, { command: string; args: string[]; env: Record<string, string> }> = {
+    nanoclaw: {
+      command: 'node',
+      args: [mcpServerPath],
+      env: {
+        NANOCLAW_CHAT_JID: containerInput.chatJid,
+        NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+        NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+      },
+    },
+  };
+
+  // LeanRAG is at /workspace/leanrag for non-main groups (dedicated mount)
+  // or /workspace/project/leanrag for main (project root mount).
+  const leanragPaths = ['/workspace/leanrag', '/workspace/project/leanrag'];
+  const leanragRoot = leanragPaths.find(p => fs.existsSync(`${p}/graph.pkl`));
+  if (leanragRoot) {
+    servers.leanrag = {
+      command: '/opt/leanrag/bin/python3',
+      args: ['-m', 'leanrag.mcp_server'],
+      env: {
+        PYTHONPATH: path.dirname(leanragRoot),
+        ...(Object.fromEntries(
+          ['AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_ACCESS_KEY_ID',
+           'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN']
+            .filter(k => sdkEnv[k])
+            .map(k => [k, sdkEnv[k]!])
+        )),
+      },
+    };
+  }
+
+  return servers;
+}
+
 async function runQuery(
   prompt: string,
   sessionId: string | undefined,
@@ -430,23 +470,14 @@ async function runQuery(
         'TeamCreate', 'TeamDelete', 'SendMessage',
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
-        'mcp__nanoclaw__*'
+        'mcp__nanoclaw__*',
+        'mcp__leanrag__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       settingSources: ['project', 'user'],
-      mcpServers: {
-        nanoclaw: {
-          command: 'node',
-          args: [mcpServerPath],
-          env: {
-            NANOCLAW_CHAT_JID: containerInput.chatJid,
-            NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
-            NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
-          },
-        },
-      },
+      mcpServers: buildMcpServers(mcpServerPath, containerInput, sdkEnv),
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook()] }],
         PreToolUse: [{ matcher: 'Bash', hooks: [createSanitizeBashHook()] }],

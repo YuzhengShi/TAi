@@ -36,3 +36,9 @@ agents-sdk-docs
 
 # Course materials (copyrighted, local only)
 cs6650-materials/
+
+# LeanRAG build artifacts
+leanrag/cache/
+leanrag/graph.pkl
+leanrag/chunk_index.json
+leanrag/__pycache__/

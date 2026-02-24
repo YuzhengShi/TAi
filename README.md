@@ -51,12 +51,15 @@ Transform chatbot into teaching agent using CLAUDE.md, COMPETENCY.md, and existi
 - **Proactive Teaching Patrol** — Daily scheduled check: decides who needs intervention and why, 90% of patrols should result in "no action needed"
 - **Text-Based Mock Interviews** — Practice sessions targeting weak spots and verbal gaps from COMPETENCY.md
 
-### Phase 2: LeanRAG Knowledge Graph
+### Phase 2: LeanRAG Knowledge Graph (Current)
 
 Give TAi structured course knowledge so answers are grounded in course materials, not just Claude's training data.
 
-- Offline graph construction from lecture slides, assignments, papers, and professor's notes
-- Query-time retrieval via embedding + graph traversal (zero LLM calls at query time)
+- **Offline graph construction** from lecture slides, assignments, papers, and professor's notes via DeepSeek V3.2 + Cohere Embed v4
+- **Three-layer hierarchy**: G0 entities → G1 clusters (GMM) → G2 themes, with LCA path traversal at query time
+- **Zero LLM calls at query time** — embedding + graph traversal only
+- **MCP integration**: `query_knowledge` tool available inside Docker containers via Python MCP server
+- **Agent instructions**: global CLAUDE.md tells agent when to retrieve (assignment-specific, course framing) vs skip (general concepts)
 - Graph-informed teaching: mock interview questions from student's weak areas, prerequisite gap detection
 
 ### Phase 3: Voice Interview + Evaluation
@@ -79,7 +82,8 @@ Real-time voice mock interviews with live evaluation.
 | `src/task-scheduler.ts` | Scheduled task execution |
 | `src/db.ts` | SQLite operations |
 | `container/agent-runner/src/index.ts` | Runs inside container, calls Claude Agent SDK |
-| `groups/global/CLAUDE.md` | TAi teaching persona + five-step reasoning loop |
+| `leanrag/` | LeanRAG knowledge graph: build, query, MCP server |
+| `groups/global/CLAUDE.md` | TAi teaching persona + six-step reasoning loop |
 | `groups/{student}/CLAUDE.md` | Per-student agent instructions |
 | `groups/{student}/COMPETENCY.md` | Per-student graduated mastery tracking |
 
