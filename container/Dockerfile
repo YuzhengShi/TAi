@@ -62,7 +62,7 @@ RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/lean
 # Create entrypoint script
 # Initial input + follow-up messages arrive via stdin (NDJSON protocol)
 # exec replaces bash so node inherits stdin directly from Docker
-RUN printf '#!/bin/bash\nset -e\ncd /app && npx tsc --outDir /tmp/dist 2>&1 >&2\nln -s /app/node_modules /tmp/dist/node_modules\nchmod -R a-w /tmp/dist\nexec node /tmp/dist/index.js\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+RUN printf '#!/bin/bash\nset -e\ncd /app && npx tsc --outDir /tmp/dist 1>&2\nln -s /app/node_modules /tmp/dist/node_modules\nchmod -R a-w /tmp/dist\nexec node /tmp/dist/index.js\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # Set ownership to node user (non-root) for writable directories
 RUN chown -R node:node /workspace && chmod 777 /home/node

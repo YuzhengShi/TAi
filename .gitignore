@@ -42,3 +42,6 @@ leanrag/cache/
 leanrag/graph.pkl
 leanrag/chunk_index.json
 leanrag/__pycache__/
+
+# Cache
+.npm-cache/

@@ -41,7 +41,7 @@ const server = new McpServer({
 
 server.tool(
   'send_message',
-  "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times. Note: when running as a scheduled task, your final output is NOT sent to the user — use this tool if you need to communicate with the user or group.",
+  "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times. Your text output is ALSO forwarded to the user — wrap any internal reasoning in <internal> tags to suppress it.",
   {
     text: z.string().describe('The message text to send'),
     sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.'),
@@ -115,7 +115,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       const date = new Date(args.schedule_value);
       if (isNaN(date.getTime())) {
         return {
-          content: [{ type: 'text' as const, text: `Invalid timestamp: "${args.schedule_value}". Use ISO 8601 format like "2026-02-01T15:30:00.000Z".` }],
+          content: [{ type: 'text' as const, text: `Invalid timestamp: "${args.schedule_value}". Use local time like "2026-02-01T15:30:00" (no Z suffix).` }],
           isError: true,
         };
       }
@@ -247,7 +247,8 @@ Use available_groups.json to find the JID for a group. The folder name should be
     jid: z.string().describe('The WhatsApp JID (e.g., "120363336345536173@g.us")'),
     name: z.string().describe('Display name for the group'),
     folder: z.string().describe('Folder name for group files (lowercase, hyphens, e.g., "family-chat")'),
-    trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
+    trigger: z.string().describe('Trigger word (e.g., "@TAi")'),
+    requires_trigger: z.boolean().default(true).describe('Whether messages need the trigger prefix. Set to false for 1-on-1 student chats where all messages should be processed.'),
   },
   async (args) => {
     if (!isMain) {
@@ -263,6 +264,7 @@ Use available_groups.json to find the JID for a group. The folder name should be
       name: args.name,
       folder: args.folder,
       trigger: args.trigger,
+      requiresTrigger: args.requires_trigger,
       timestamp: new Date().toISOString(),
     };
 

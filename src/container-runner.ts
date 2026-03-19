@@ -14,6 +14,7 @@ import {
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  TIMEZONE,
 } from './config.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
@@ -199,7 +200,7 @@ function buildVolumeMounts(
  * Secrets are never written to disk or mounted as files.
  * Also picks up AWS credentials from process.env (common in sandbox/EC2 environments).
  */
-function readSecrets(): Record<string, string> {
+function readSecrets(useLight = false): Record<string, string> {
   const secrets = readEnvFile([
     'CLAUDE_CODE_OAUTH_TOKEN',
     'ANTHROPIC_API_KEY',
@@ -209,6 +210,7 @@ function readSecrets(): Record<string, string> {
     'AWS_REGION',
     'AWS_DEFAULT_REGION',
     'ANTHROPIC_MODEL',
+    'ANTHROPIC_MODEL_LIGHT',
   ]);
 
   // Fall back to process.env for AWS credentials (e.g. AWS sandbox/EC2 roles)
@@ -229,6 +231,12 @@ function readSecrets(): Record<string, string> {
     }
   }
 
+  // Model routing: use light model (Haiku) for scheduled tasks and simple interactions
+  if (useLight && secrets['ANTHROPIC_MODEL_LIGHT']) {
+    secrets['ANTHROPIC_MODEL'] = secrets['ANTHROPIC_MODEL_LIGHT'];
+  }
+  delete secrets['ANTHROPIC_MODEL_LIGHT'];
+
   return secrets;
 }
 
@@ -244,6 +252,9 @@ function buildContainerArgs(mounts: VolumeMount[], containerName: string): strin
     args.push('--user', `${hostUid}:${hostGid}`);
     args.push('-e', 'HOME=/home/node');
   }
+
+  // Pass host timezone so the Claude Code preset's date injection is correct
+  args.push('-e', `TZ=${TIMEZONE}`);
 
   // Docker: -v with :ro suffix for readonly
   for (const mount of mounts) {
@@ -314,7 +325,8 @@ export async function runContainerAgent(
     let stderrTruncated = false;
 
     // Pass secrets via stdin (never written to disk or mounted as files)
-    input.secrets = readSecrets();
+    // Use light model (Haiku) for scheduled tasks to reduce cost
+    input.secrets = readSecrets(input.isScheduledTask === true);
     container.stdin.write(JSON.stringify(input) + '\n');
     // Remove secrets from input so they don't appear in logs
     delete input.secrets;

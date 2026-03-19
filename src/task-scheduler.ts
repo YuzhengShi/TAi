@@ -16,6 +16,7 @@ import {
   getDueTasks,
   getTaskById,
   logTaskRun,
+  updateTask,
   updateTaskAfterRun,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
@@ -212,6 +213,22 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
         if (runningTasks.has(currentTask.id)) continue;
 
         runningTasks.add(currentTask.id);
+
+        // Advance next_run BEFORE executing to prevent re-triggering on crash/restart.
+        // If the process dies mid-task, next_run already points to the future.
+        if (currentTask.schedule_type === 'cron') {
+          try {
+            const interval = CronExpressionParser.parse(currentTask.schedule_value, { tz: TIMEZONE });
+            const next = interval.next().toISOString();
+            updateTask(currentTask.id, { next_run: next });
+          } catch { /* will be updated again after completion */ }
+        } else if (currentTask.schedule_type === 'interval') {
+          const ms = parseInt(currentTask.schedule_value, 10);
+          if (!isNaN(ms) && ms > 0) {
+            updateTask(currentTask.id, { next_run: new Date(Date.now() + ms).toISOString() });
+          }
+        }
+
         deps.queue.enqueueTask(
           currentTask.chat_jid,
           currentTask.id,

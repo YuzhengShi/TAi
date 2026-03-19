@@ -47,6 +47,7 @@ export class WhatsAppChannel implements Channel {
   private outgoingQueue: Array<{ jid: string; text: string }> = [];
   private flushing = false;
   private groupSyncTimerStarted = false;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   private opts: WhatsAppChannelOpts;
 
@@ -194,6 +195,11 @@ export class WhatsAppChannel implements Channel {
         // Translate LID JID to phone JID if applicable
         const chatJid = await this.translateJid(rawJid);
 
+        // Mark message as read immediately (blue ticks) so student knows TAi saw it
+        if (!msg.key.fromMe) {
+          this.sock.readMessages([msg.key]).catch(() => {});
+        }
+
         const timestamp = new Date(
           Number(msg.messageTimestamp) * 1000,
         ).toISOString();
@@ -213,6 +219,18 @@ export class WhatsAppChannel implements Channel {
             msg.message?.videoMessage?.caption ||
             msg.message?.documentMessage?.caption ||
             '';
+
+          // Include quoted message context when student replies to a specific message
+          const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+          if (quoted) {
+            const quotedText = quoted.conversation
+              || quoted.extendedTextMessage?.text
+              || quoted.imageMessage?.caption
+              || '';
+            if (quotedText) {
+              content = `[Replying to: "${quotedText.slice(0, 200)}"]\n${content}`;
+            }
+          }
 
           // Handle supported media (image, document, sticker)
           const mediaPath = await this.downloadMedia(msg, group.folder);
@@ -285,9 +303,12 @@ export class WhatsAppChannel implements Channel {
       await this.sock.sendMessage(jid, { text: prefixed });
       logger.info({ jid, length: prefixed.length }, 'Message sent');
     } catch (err) {
-      // If send fails, queue it for retry on reconnect
+      // If send fails, queue it for retry
       this.outgoingQueue.push({ jid, text: prefixed });
       logger.warn({ jid, err, queueSize: this.outgoingQueue.length }, 'Failed to send, message queued');
+      // Schedule a delayed retry — 403 from groupMetadata is often transient
+      // (e.g. initial sync not yet complete) and resolves without reconnection
+      this.scheduleRetryFlush();
     }
   }
 
@@ -454,12 +475,31 @@ export class WhatsAppChannel implements Channel {
           this.outgoingQueue.shift(); // Only remove after successful send
           logger.info({ jid: item.jid, length: item.text.length }, 'Queued message sent');
         } catch (err) {
-          logger.warn({ jid: item.jid, err }, 'Failed to send queued message, will retry on next reconnect');
+          logger.warn({ jid: item.jid, err }, 'Failed to send queued message, will retry');
+          this.scheduleRetryFlush();
           break; // Stop flushing — remaining items stay in queue
         }
       }
     } finally {
       this.flushing = false;
     }
+  }
+
+  /**
+   * Schedule a delayed retry for the outgoing queue.
+   * Handles transient failures (e.g. 403 from groupMetadata during initial sync)
+   * without requiring a full reconnection.
+   */
+  private scheduleRetryFlush(): void {
+    if (this.retryTimer) return; // already scheduled
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      if (this.connected && this.outgoingQueue.length > 0) {
+        logger.info({ queueSize: this.outgoingQueue.length }, 'Retrying queued messages');
+        this.flushOutgoingQueue().catch((err) =>
+          logger.error({ err }, 'Retry flush failed'),
+        );
+      }
+    }, 15_000); // 15 second delay — enough for group metadata sync to complete
   }
 }

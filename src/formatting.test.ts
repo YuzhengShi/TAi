@@ -60,11 +60,11 @@ describe('escapeXml', () => {
 describe('formatMessages', () => {
   it('formats a single message as XML', () => {
     const result = formatMessages([makeMsg()]);
-    expect(result).toBe(
-      '<messages>\n' +
-        '<message sender="Alice" time="2024-01-01T00:00:00.000Z">hello</message>\n' +
-        '</messages>',
-    );
+    expect(result).toContain('<messages>');
+    expect(result).toContain('sender="Alice"');
+    expect(result).toContain('>hello</message>');
+    // Timestamp should be locale-formatted, not raw ISO
+    expect(result).not.toContain('2024-01-01T00:00:00.000Z');
   });
 
   it('formats multiple messages', () => {
@@ -158,6 +158,16 @@ describe('stripInternalTags', () => {
 
   it('returns empty string when text is only internal tags', () => {
     expect(stripInternalTags('<internal>only this</internal>')).toBe('');
+  });
+
+  it('strips unclosed internal tag (entire output is internal)', () => {
+    expect(stripInternalTags('<internal>\nSome reasoning...')).toBe('');
+  });
+
+  it('strips unclosed internal tag preserving text before it', () => {
+    expect(
+      stripInternalTags('response text\n<internal>\nreasoning stuff'),
+    ).toBe('response text');
   });
 });
 

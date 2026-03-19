@@ -14,8 +14,7 @@ Single Node.js process connecting WhatsApp (Baileys) to Claude Agent SDK running
 WhatsApp → SQLite → Message Loop → Docker Container → Claude Agent SDK (Bedrock) → Response
                                          ↓
                               MCP Tools: send_message, schedule_task,
-                                         query_knowledge (LeanRAG),
-                                         update_competency
+                                         query_knowledge (LeanRAG)
 ```
 
 ### Model Strategy (Bedrock)
@@ -66,6 +65,7 @@ WhatsApp → SQLite → Message Loop → Docker Container → Claude Agent SDK (
 10. Deployment and Observability
 11. Replication, Partitioning, Consistency (Paxos, Raft)
 12. Tradeoffs with Data Storage
+13. (Spring break — no class)
 14. Practical Considerations (Final Mastery)
 15. Poster, Presentation, Report
 
@@ -98,23 +98,23 @@ TAs ask students about homework code AND weekly concepts. Students must:
 #### 1A. Graduated Student Model
 - [x] Global CLAUDE.md with teaching persona + five-step reasoning loop
 - [x] Main CLAUDE.md updated (Jay → TAi, admin dashboard added)
-- [ ] Deploy enhanced COMPETENCY.md with four-dimensional tracking:
+- [x] Deploy enhanced COMPETENCY.md with four-dimensional tracking:
   - `confidence` (0.0-1.0 mastery estimate)
   - `stability` (how confirmed — tested once vs multiple times)
   - `context_scope` (theoretical / implementation / debugging / verbal)
   - `demonstrated_via` (socratic_dialogue / code_review / mock_interview / homework)
-- [ ] Agent instruction in global CLAUDE.md: after every substantive interaction, update COMPETENCY.md with all four dimensions
+- [x] Agent instruction in global CLAUDE.md: after every substantive interaction, update COMPETENCY.md with all four dimensions
 - [ ] Verbal vs written gap detection: flag concepts where student has theoretical/implementation scope but NOT verbal scope → mock interview risk
 
 #### 1B. Emergent Misconception Discovery
-- [ ] Add misconception tracking section to COMPETENCY.md (starts empty, never pre-loaded)
-- [ ] Agent instruction: when student says something contradicting a concept, record it as candidate misconception
+- [x] Add misconception tracking section to COMPETENCY.md (starts empty, never pre-loaded)
+- [x] Agent instruction: when student says something contradicting a concept, record it as candidate misconception
 - [ ] Distinguish HOLDING vs IDENTIFYING misconception (student discussing it correctly vs believing it)
-- [ ] Track remediation attempts and effectiveness
-- [ ] When same misconception frequency >= 3, mark as confirmed → agent proactively addresses in future
+- [x] Track remediation attempts and effectiveness
+- [x] When same misconception frequency >= 3, mark as confirmed → agent proactively addresses in future
 
 #### 1C. Teaching Strategy Selection
-- [ ] Agent uses COMPETENCY.md to choose strategy per interaction:
+- [x] Agent uses COMPETENCY.md to choose strategy per interaction:
   - confidence LOW + stability LOW → EXPLAIN (build foundation)
   - confidence MEDIUM + stability LOW → SOCRATIC (probe and confirm)
   - confidence HIGH + scope missing "verbal" → MOCK PRACTICE (verbal articulation)
@@ -124,21 +124,21 @@ TAs ask students about homework code AND weekly concepts. Students must:
 - [ ] Log strategy used and outcome in COMPETENCY.md Teaching Strategy Log
 
 #### 1D. Proactive Teaching Patrol
-- [ ] Schedule daily task (cron 9am weekdays): agent reads COMPETENCY.md, decides who needs intervention
-- [ ] Intervention triggers (state-driven, not just timer):
+- [x] Schedule daily task (cron 9am weekdays): agent reads COMPETENCY.md, decides who needs intervention
+- [x] Intervention triggers (state-driven, not just timer):
   - 5+ days inactive + deadline approaching → reach out with value
   - Low mastery on this week's topic + mock interview coming → offer practice
   - Concept with high confidence but low stability + 14+ days since last evidence → spaced review
   - Misconception confirmed but not yet remediated → targeted correction
-- [ ] 90% of patrols should result in "no action needed" — agent value is judgment, not volume
+- [x] 90% of patrols should result in "no action needed" — agent value is judgment, not volume
 - [ ] Log all proactive decisions (including "decided NOT to intervene") in Proactive Intervention Log
 
 #### 1E. Mock Interview Practice (Text-Based)
-- [ ] Agent can conduct text-based mock interviews based on homework Learning Outcomes
-- [ ] Uses COMPETENCY.md to target weak spots and verbal gaps
-- [ ] Evaluates answers on 4 dimensions: verbal_clarity, technical_accuracy, depth_of_reasoning, problem_solving_process (1-5 each)
-- [ ] Principle: "process over correctness" — reasoning through failure modes with minor errors > reciting correct facts
-- [ ] Updates COMPETENCY.md with mock interview scores and verbal scope
+- [x] Agent can conduct text-based mock interviews based on homework Learning Outcomes
+- [x] Uses COMPETENCY.md to target weak spots and verbal gaps
+- [x] Evaluates answers on 4 dimensions: verbal_clarity, technical_accuracy, depth_of_reasoning, problem_solving_process (1-5 each)
+- [x] Principle: "process over correctness" — reasoning through failure modes with minor errors > reciting correct facts
+- [x] Updates COMPETENCY.md with mock interview scores and verbal scope
 
 **Phase 1 Milestone:** Student asks about Docker. TAi reads COMPETENCY.md (Docker confidence: 0.4, stability: 0.2, scope: ["theoretical"], no verbal). TAi chooses SOCRATIC strategy: "You mentioned Docker uses images and containers. Walk me through what actually happens when you run `docker build` — what's the Dockerfile doing step by step?" After the student answers, TAi updates all four dimensions and notes which teaching approach worked. The next day, TAi's teaching patrol notices the student hasn't practiced verbally and mock interview is in 2 days — sends a proactive message offering a quick practice round.
 
@@ -148,33 +148,33 @@ TAs ask students about homework code AND weekly concepts. Students must:
 *Goal: Give TAi structured course knowledge. Agent answers grounded in course materials, not just Claude's training data.*
 
 #### 2A. Offline Graph Construction
-- [ ] Preprocess Obsidian vault (CS6650 materials) → extract entities and relations
+- [x] Preprocess Obsidian vault (CS6650 materials) → extract entities and relations
   - Lecture slides → Concept nodes, FOLLOWS edges (topic ordering)
   - Assignment specs → LearningObjective nodes, REQUIRES edges
   - Research papers (MapReduce, Paxos, Raft) → authoritative Concept definitions
   - Professor's notes → Concept.emphasis, Concept.analogy fields
   - Previous semester discussion posts (anonymized) → common confusion signals
-- [ ] Entity extraction via DeepSeek V3.2 (Bedrock serverless, offline batch)
-- [ ] Embedding via Cohere Embed v4 (Bedrock)
-- [ ] GMM clustering (cluster_size=20) → aggregated entities
-- [ ] Inter-cluster relation generation (threshold τ=3) via DeepSeek V3.2
-- [ ] Store as NetworkX graph + pickle serialization (no Neo4j needed for this corpus size)
+- [x] Entity extraction via DeepSeek V3.2 (Bedrock serverless, offline batch)
+- [x] Embedding via Cohere Embed v4 (Bedrock)
+- [x] GMM clustering (cluster_size=20) → aggregated entities
+- [x] Inter-cluster relation generation (threshold τ=3) via DeepSeek V3.2
+- [x] Store as NetworkX graph + pickle serialization (no Neo4j needed for this corpus size)
 
 #### 2B. Query-Time Retrieval
-- [ ] Student query → Cohere Embed v4 → Top-N seed entities from G0
-- [ ] LCA path traversal through hierarchical graph → subgraph + original text chunks
-- [ ] Zero LLM calls at query time — only embedding + graph traversal
-- [ ] Difficulty layers based on graph level:
+- [x] Student query → Cohere Embed v4 → Top-N seed entities from G0
+- [x] LCA path traversal through hierarchical graph → subgraph + original text chunks
+- [x] Zero LLM calls at query time — only embedding + graph traversal
+- [x] Difficulty layers based on graph level:
   - G0 entity-level: "What does a Paxos proposer do?"
   - G1 cluster-level: "Compare consensus protocols"
   - G2 theme-level: "Analyze fault tolerance vs scalability tradeoffs"
 
 #### 2C. MCP Integration
-- [ ] Python MCP server wrapping LeanRAG (stdio transport)
-- [ ] Tool: `query_knowledge(question, difficulty)` → returns structured course knowledge
-- [ ] Register in agent-runner's MCP server list
-- [ ] Agent uses retrieval results as grounded context, not Claude's general knowledge
-- [ ] Claim extraction: agent checks its response against retrieved sources, flags unverified claims
+- [x] Python MCP server wrapping LeanRAG (stdio transport)
+- [x] Tool: `query_knowledge(question, difficulty)` → returns structured course knowledge
+- [x] Register in agent-runner's MCP server list
+- [x] Agent uses retrieval results as grounded context, not Claude's general knowledge
+- [x] Claim extraction: agent checks its response against retrieved sources, flags unverified claims
 
 #### 2D. Graph-Informed Teaching
 - [ ] Mock interview questions generated from graph: pull concepts from student's weak areas in COMPETENCY.md, retrieve related entities and relations, formulate contextual questions

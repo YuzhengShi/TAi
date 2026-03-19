@@ -218,8 +218,10 @@ function createPreCompactHook(): HookCallback {
       const conversationsDir = '/workspace/group/conversations';
       fs.mkdirSync(conversationsDir, { recursive: true });
 
-      const date = new Date().toISOString().split('T')[0];
-      const filename = `${date}-${name}.md`;
+      const now = new Date();
+      const date = now.toISOString().split('T')[0];
+      const time = `${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}`;
+      const filename = `${date}-${time}-${name}.md`;
       const filePath = path.join(conversationsDir, filename);
 
       const markdown = formatTranscriptMarkdown(messages, summary);
@@ -308,6 +310,13 @@ function parseTranscript(content: string): ParsedMessage[] {
   return messages;
 }
 
+function stripInternalTags(text: string): string {
+  return text
+    .replace(/<internal>[\s\S]*?<\/internal>/g, '')  // closed tags
+    .replace(/<internal>[\s\S]*$/g, '')               // unclosed tag → strip to end
+    .trim();
+}
+
 function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | null): string {
   const now = new Date();
   const formatDateTime = (d: Date) => d.toLocaleString('en-US', {
@@ -328,9 +337,12 @@ function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | nu
 
   for (const msg of messages) {
     const sender = msg.role === 'user' ? 'User' : 'TAi';
-    const content = msg.content.length > 2000
-      ? msg.content.slice(0, 2000) + '...'
-      : msg.content;
+    // Strip <internal> reasoning blocks from archived assistant messages
+    const cleaned = msg.role === 'assistant' ? stripInternalTags(msg.content) : msg.content;
+    if (!cleaned) continue;
+    const content = cleaned.length > 2000
+      ? cleaned.slice(0, 2000) + '...'
+      : cleaned;
     lines.push(`**${sender}**: ${content}`);
     lines.push('');
   }
@@ -367,6 +379,7 @@ function buildMcpServers(
   const leanragPaths = ['/workspace/leanrag', '/workspace/project/leanrag'];
   const leanragRoot = leanragPaths.find(p => fs.existsSync(`${p}/graph.pkl`));
   if (leanragRoot) {
+    log(`LeanRAG registered: ${leanragRoot}/graph.pkl`);
     servers.leanrag = {
       command: '/opt/leanrag/bin/python3',
       args: ['-m', 'leanrag.mcp_server'],
@@ -380,6 +393,8 @@ function buildMcpServers(
         )),
       },
     };
+  } else {
+    log(`LeanRAG NOT found (checked: ${leanragPaths.join(', ')})`);
   }
 
   return servers;
@@ -429,10 +444,13 @@ async function runQuery(
   let messageCount = 0;
   let resultCount = 0;
 
-  // Load global CLAUDE.md as additional system context (shared across all groups)
-  const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
+  // Load global CLAUDE.md as additional system context (shared across all groups).
+  // Main also loads it so admin can test the teaching persona in the same DM.
+  const globalClaudeMdPath = containerInput.isMain
+    ? '/workspace/project/groups/global/CLAUDE.md'
+    : '/workspace/global/CLAUDE.md';
   let globalClaudeMd: string | undefined;
-  if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
+  if (fs.existsSync(globalClaudeMdPath)) {
     globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
   }
 
@@ -452,6 +470,17 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  // Inject current date+time so the agent can answer time questions accurately
+  // Explicitly pass timeZone so it works reliably inside Docker containers
+  const tz = process.env.TZ || 'UTC';
+  const now = new Date();
+  const dateTimeHeader = `Current date and time: ${now.toLocaleDateString('en-US', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: tz,
+  })} at ${now.toLocaleTimeString('en-US', {
+    hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz, timeZoneName: 'short',
+  })}.\n\n`;
+  const systemAppend = dateTimeHeader + (globalClaudeMd || '');
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -459,9 +488,7 @@ async function runQuery(
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
-      systemPrompt: globalClaudeMd
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
-        : undefined,
+      systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: systemAppend },
       allowedTools: [
         'Bash',
         'Read', 'Write', 'Edit', 'Glob', 'Grep',

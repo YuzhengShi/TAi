@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import {
   ASSISTANT_NAME,
   DATA_DIR,
+  DEBOUNCE_MS,
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
@@ -35,8 +36,9 @@ import {
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { startIpcWatcher } from './ipc.js';
-import { findChannel, formatMessages, formatOutbound } from './router.js';
+import { findChannel, formatMessages, formatOutbound, stripInternalTags } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
+import { seedTeachingPatrol } from './teaching-patrol.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
@@ -52,6 +54,12 @@ let messageLoopRunning = false;
 // Prevents re-piping while ensuring processGroupMessages can
 // re-discover them if the container crashes without processing.
 let pipedUpTo: Record<string, string> = {};
+
+// Debounce timers for agent spawning — waits for the student to finish
+// typing fragmented WhatsApp messages before spawning a container.
+// Only applies when no container is active; active containers get
+// messages piped immediately via stdin.
+const debounceTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 
 // --- Typing indicator management (shared between processGroupMessages and pipe path) ---
 const typingIntervals: Record<string, ReturnType<typeof setInterval>> = {};
@@ -196,20 +204,36 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   let hadError = false;
   let outputSentToUser = false;
+  let emptyOutputRetried = false;
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
     if (result.result) {
       const raw = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+      const text = stripInternalTags(raw);
       logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
       if (text) {
         await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+        // Response sent — stop typing until a new message is piped
+        stopTypingIndicator(channel, chatJid);
+        emptyOutputRetried = false;
+      } else if (!emptyOutputRetried) {
+        // Agent output was entirely <internal> reasoning — student gets nothing.
+        // Nudge the agent to produce a visible response (one retry only).
+        emptyOutputRetried = true;
+        logger.warn({ group: group.name }, 'Agent output stripped to empty (all internal), sending retry prompt');
+        queue.sendMessage(chatJid,
+          '[SYSTEM] Your previous output was entirely inside <internal> tags — the student received nothing. You MUST include student-facing text outside <internal> tags. Respond to the student now.');
+      } else {
+        logger.warn({ group: group.name }, 'Agent output stripped to empty after retry, giving up');
+        channel.sendMessage(chatJid, "hey, sorry — I had a thought but lost it. what were you asking?").catch(() => {});
+        stopTypingIndicator(channel, chatJid);
       }
-      // Response sent — stop typing until a new message is piped
-      stopTypingIndicator(channel, chatJid);
+      // Agent produced output — it likely already sent messages via IPC send_message.
+      // Mark as sent even if text was stripped (all <internal>) to prevent
+      // cursor rollback that would cause duplicate messages on error.
+      outputSentToUser = true;
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
     }
@@ -237,6 +261,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     delete pipedUpTo[chatJid];
     saveState();
     logger.warn({ group: group.name }, 'Agent error, rolled back message cursor for retry');
+    channel.sendMessage(chatJid, "sorry, something went wrong on my end — give me a sec and try again?").catch(() => {});
     return false;
   }
 
@@ -417,9 +442,21 @@ async function startMessageLoop(): Promise<void> {
             // Restart typing indicator while the container processes the piped message
             startTypingIndicator(channel, chatJid);
           } else {
-            // No active container — clear piped tracking and enqueue for a new one
+            // No active container — debounce before spawning a new one.
+            // Students often send fragmented WhatsApp messages ("hey" → "about raft"
+            // → "how does leader election work?"). Waiting DEBOUNCE_MS after the
+            // last message ensures all fragments are included in the initial prompt.
             delete pipedUpTo[chatJid];
-            queue.enqueueMessageCheck(chatJid);
+            if (!debounceTimers[chatJid]) {
+              // Show typing immediately so student knows we're processing
+              startTypingIndicator(channel, chatJid);
+              debounceTimers[chatJid] = setTimeout(() => {
+                delete debounceTimers[chatJid];
+                queue.enqueueMessageCheck(chatJid);
+              }, DEBOUNCE_MS);
+            }
+            // If timer already set, new messages will be picked up when it fires
+            // (processGroupMessages re-fetches all pending via getMessagesSince)
           }
         }
       }
@@ -536,9 +573,11 @@ async function main(): Promise<void> {
     },
   });
   startIpcWatcher({
-    sendMessage: (jid, text) => {
+    sendMessage: (jid, rawText) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      const text = formatOutbound(rawText);
+      if (!text) return Promise.resolve();
       return channel.sendMessage(jid, text);
     },
     registeredGroups: () => registeredGroups,
@@ -548,6 +587,7 @@ async function main(): Promise<void> {
     writeGroupsSnapshot: (gf, im, ag, rj) => writeGroupsSnapshot(gf, im, ag, rj),
   });
   queue.setProcessMessagesFn(processGroupMessages);
+  seedTeachingPatrol(registeredGroups);
   recoverPendingMessages();
   startMessageLoop();
 }
