@@ -41,17 +41,17 @@ Single Node.js process connecting WhatsApp (Baileys) to the Claude Agent SDK run
 
 ## Implementation Phases
 
-### Phase 1: Agentic TA Core (Current)
+### Phase 1: Agentic TA Core ✅
 
 Transform chatbot into teaching agent using CLAUDE.md, COMPETENCY.md, and existing NanoClaw primitives. No new infrastructure.
 
 - **Graduated Student Model** — Four-dimensional tracking per concept: confidence, stability, context scope, demonstrated via
 - **Emergent Misconception Discovery** — Misconceptions recorded organically from student interactions, never pre-loaded
 - **Teaching Strategy Selection** — Agent chooses approach (Socratic, explain, challenge, correct, mock practice) based on competency state
-- **Proactive Teaching Patrol** — Daily scheduled check: decides who needs intervention and why, 90% of patrols should result in "no action needed"
+- **Proactive Teaching Patrol** — Daily scheduled check: decides who needs intervention and why, 90% of patrols result in "no action needed"
 - **Text-Based Mock Interviews** — Practice sessions targeting weak spots and verbal gaps from COMPETENCY.md
 
-### Phase 2: LeanRAG Knowledge Graph (Current)
+### Phase 2: LeanRAG Knowledge Graph ✅
 
 Give TAi structured course knowledge so answers are grounded in course materials, not just Claude's training data.
 
@@ -60,9 +60,9 @@ Give TAi structured course knowledge so answers are grounded in course materials
 - **Zero LLM calls at query time** — embedding + graph traversal only
 - **MCP integration**: `query_knowledge` tool available inside Docker containers via Python MCP server
 - **Agent instructions**: global CLAUDE.md tells agent when to retrieve (assignment-specific, course framing) vs skip (general concepts)
-- Graph-informed teaching: mock interview questions from student's weak areas, prerequisite gap detection
+- Graph-informed teaching: mock interview questions from student's weak areas, prerequisite gap detection (in progress)
 
-### Phase 3: Voice Interview + Evaluation
+### Phase 3: Voice Interview + Evaluation (Planned)
 
 Real-time voice mock interviews with live evaluation.
 
@@ -78,6 +78,7 @@ Real-time voice mock interviews with live evaluation.
 | `src/index.ts` | Orchestrator: state, message loop, agent invocation |
 | `src/channels/whatsapp.ts` | WhatsApp connection, auth, send/receive |
 | `src/container-runner.ts` | Spawns Docker containers with mounts |
+| `src/teaching-patrol.ts` | Proactive daily teaching intervention logic |
 | `src/group-queue.ts` | Per-group queue with concurrency control |
 | `src/task-scheduler.ts` | Scheduled task execution |
 | `src/db.ts` | SQLite operations |
