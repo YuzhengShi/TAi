@@ -202,12 +202,40 @@ function buildVolumeMounts(
   return mounts;
 }
 
+/** Cache for instance role credentials (refreshed when expiring). */
+let cachedInstanceCreds: { accessKeyId: string; secretAccessKey: string; sessionToken: string; expiration: string } | null = null;
+
+async function fetchInstanceRoleCreds(): Promise<typeof cachedInstanceCreds> {
+  // Return cached if still valid (refresh 5 min before expiry)
+  if (cachedInstanceCreds) {
+    const expiresAt = new Date(cachedInstanceCreds.expiration).getTime();
+    if (Date.now() < expiresAt - 5 * 60 * 1000) return cachedInstanceCreds;
+  }
+  try {
+    const res = await fetch('http://169.254.169.254/latest/meta-data/iam/security-credentials/');
+    if (!res.ok) return null;
+    const roleName = (await res.text()).trim();
+    const credsRes = await fetch(`http://169.254.169.254/latest/meta-data/iam/security-credentials/${roleName}`);
+    if (!credsRes.ok) return null;
+    const data = await credsRes.json() as any;
+    cachedInstanceCreds = {
+      accessKeyId: data.AccessKeyId,
+      secretAccessKey: data.SecretAccessKey,
+      sessionToken: data.Token,
+      expiration: data.Expiration,
+    };
+    return cachedInstanceCreds;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Read allowed secrets from .env for passing to the container via stdin.
  * Secrets are never written to disk or mounted as files.
- * Also picks up AWS credentials from process.env (common in sandbox/EC2 environments).
+ * Also picks up AWS credentials from process.env or EC2 instance role.
  */
-function readSecrets(useLight = false): Record<string, string> {
+async function readSecrets(useLight = false): Promise<Record<string, string>> {
   const secrets = readEnvFile([
     'CLAUDE_CODE_OAUTH_TOKEN',
     'ANTHROPIC_API_KEY',
@@ -238,6 +266,16 @@ function readSecrets(useLight = false): Record<string, string> {
   for (const key of awsKeys) {
     if (!secrets[key] && process.env[key]) {
       secrets[key] = process.env[key]!;
+    }
+  }
+
+  // Fall back to EC2 instance role metadata service (auto-rotating credentials)
+  if (!secrets.AWS_ACCESS_KEY_ID) {
+    const creds = await fetchInstanceRoleCreds();
+    if (creds) {
+      secrets.AWS_ACCESS_KEY_ID = creds.accessKeyId;
+      secrets.AWS_SECRET_ACCESS_KEY = creds.secretAccessKey;
+      secrets.AWS_SESSION_TOKEN = creds.sessionToken;
     }
   }
 
@@ -384,6 +422,10 @@ export async function runContainerAgent(
     logger.warn({ err, group: group.folder }, 'Failed to write memory_store.json');
   }
 
+  // Pass secrets via stdin (never written to disk or mounted as files)
+  // Use light model (Haiku) for scheduled tasks to reduce cost
+  input.secrets = await readSecrets(input.isScheduledTask === true);
+
   return new Promise((resolve) => {
     const container = spawn('docker', containerArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -396,9 +438,6 @@ export async function runContainerAgent(
     let stdoutTruncated = false;
     let stderrTruncated = false;
 
-    // Pass secrets via stdin (never written to disk or mounted as files)
-    // Use light model (Haiku) for scheduled tasks to reduce cost
-    input.secrets = readSecrets(input.isScheduledTask === true);
     container.stdin.write(JSON.stringify(input) + '\n');
     // Remove secrets from input so they don't appear in logs
     delete input.secrets;
