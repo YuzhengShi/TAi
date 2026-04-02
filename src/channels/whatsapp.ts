@@ -297,7 +297,8 @@ export class WhatsAppChannel implements Channel {
             }
           }
 
-          const sender = msg.key.participant || msg.key.remoteJid || '';
+          const rawSender = msg.key.participant || msg.key.remoteJid || '';
+          const sender = await this.translateJid(rawSender);
           const senderName = msg.pushName || sender.split('@')[0];
 
           const fromMe = msg.key.fromMe || false;
