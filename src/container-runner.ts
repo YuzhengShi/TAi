@@ -649,8 +649,13 @@ export async function runContainerAgent(
         );
       }
 
-      fs.writeFileSync(logFile, logLines.join('\n'));
-      logger.debug({ logFile, verbose: isVerbose }, 'Container log written');
+      try {
+        fs.mkdirSync(path.dirname(logFile), { recursive: true });
+        fs.writeFileSync(logFile, logLines.join('\n'));
+        logger.debug({ logFile, verbose: isVerbose }, 'Container log written');
+      } catch (logErr) {
+        logger.warn({ logErr, logFile }, 'Failed to write container log (non-fatal)');
+      }
 
       if (code !== 0) {
         logger.error(
