@@ -1,0 +1,16 @@
+# Add to your docker-compose.yml
+
+services:
+  youtube-transcript-api:
+    image: ghcr.io/yourusername/youtube-transcript-api:latest
+    container_name: youtube-transcript-api
+    restart: unless-stopped
+    environment:
+      - PROXY_AUTH_TOKEN=your-secure-token-here
+      # Optional: route through another proxy if needed
+      # - UPSTREAM_PROXY=http://user:pass@proxy:8080
+    networks:
+      - your-network
+    # Expose via Cloudflare Tunnel, not directly
+    # ports:
+    #   - "8001:8000"

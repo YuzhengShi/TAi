@@ -9,14 +9,25 @@ import { readEnvFile } from './env.js';
 const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
+  'ADMIN_PHONE_NUMBERS',
 ]);
 
 export const ASSISTANT_NAME =
   process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'TAi';
 export const ASSISTANT_HAS_OWN_NUMBER =
   (process.env.ASSISTANT_HAS_OWN_NUMBER || envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
+// Admin phone allowlist: comma-separated phone numbers (digits only, e.g. "8615112345678,12025551234")
+// When set, only these numbers can send messages to the main (admin) channel.
+// Empty = no restriction (all senders allowed).
+export const ADMIN_PHONE_NUMBERS: string[] = (() => {
+  const raw = process.env.ADMIN_PHONE_NUMBERS || envConfig.ADMIN_PHONE_NUMBERS || '';
+  return raw.split(',').map(s => s.trim()).filter(Boolean);
+})();
+
 export const POLL_INTERVAL = 2000;
 export const DEBOUNCE_MS = 1500; // Wait for student to finish typing before spawning agent
+// Max characters per individual message before truncation (prevents context window exhaustion)
+export const MAX_MESSAGE_LENGTH = 10000;
 export const SCHEDULER_POLL_INTERVAL = 60000;
 
 // Absolute paths needed for container mounts
@@ -54,6 +65,11 @@ export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
 );
+
+// Container resource limits
+export const CONTAINER_MEMORY_LIMIT = process.env.CONTAINER_MEMORY_LIMIT || '2g';
+export const CONTAINER_CPU_LIMIT = process.env.CONTAINER_CPU_LIMIT || '1.0';
+export const CONTAINER_PIDS_LIMIT = process.env.CONTAINER_PIDS_LIMIT || '256';
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

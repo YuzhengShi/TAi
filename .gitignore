@@ -17,6 +17,10 @@ groups/main/*
 groups/global/*
 !groups/main/CLAUDE.md
 !groups/global/CLAUDE.md
+!groups/global/COMPETENCY_TEMPLATE.md
+!groups/global/COMPETENCY_PROTOCOL.md
+!groups/global/COURSE_REFERENCE.md
+!groups/global/TEACHING_STRATEGIES.md
 
 # Secrets
 *.keys.json

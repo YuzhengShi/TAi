@@ -8,8 +8,11 @@ import os from 'os';
 import path from 'path';
 
 import {
+  CONTAINER_CPU_LIMIT,
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
+  CONTAINER_MEMORY_LIMIT,
+  CONTAINER_PIDS_LIMIT,
   CONTAINER_TIMEOUT,
   DATA_DIR,
   GROUPS_DIR,
@@ -18,6 +21,7 @@ import {
 } from './config.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+import { buildMemoryContext, buildMemoryExport, pruneExpiredMemories } from './memory.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -43,6 +47,9 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   secrets?: Record<string, string>;
+  // Identity binding (from trusted DB, not student-writable files)
+  canvasUserId?: string;
+  githubUsername?: string;
 }
 
 export interface ContainerOutput {
@@ -211,6 +218,19 @@ function readSecrets(useLight = false): Record<string, string> {
     'AWS_DEFAULT_REGION',
     'ANTHROPIC_MODEL',
     'ANTHROPIC_MODEL_LIGHT',
+    'CANVAS_API_TOKEN',
+    'CANVAS_BASE_URL',
+    'CANVAS_COURSE_ID',
+    'GITHUB_TOKEN',
+    'GITHUB_TOKEN_PUBLIC',
+    'GITHUB_BASE_URL',
+    'YOUTUBE_API_KEY',
+    'YT_TRANSCRIPT_URL',
+    'YT_TRANSCRIPT_TOKEN',
+    'VOICE_INTERVIEW_SECRET',
+    'VOICE_PORT',
+    'VOICE_BASE_URL',
+    'GITHUB_ALLOWED_ORGS',
   ]);
 
   // Fall back to process.env for AWS credentials (e.g. AWS sandbox/EC2 roles)
@@ -240,7 +260,7 @@ function readSecrets(useLight = false): Record<string, string> {
   return secrets;
 }
 
-function buildContainerArgs(mounts: VolumeMount[], containerName: string): string[] {
+function buildContainerArgs(mounts: VolumeMount[], containerName: string, isMain: boolean): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Run as host user so bind-mounted files are accessible.
@@ -255,6 +275,29 @@ function buildContainerArgs(mounts: VolumeMount[], containerName: string): strin
 
   // Pass host timezone so the Claude Code preset's date injection is correct
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Resource limits — prevent runaway containers from exhausting host
+  args.push('--memory', CONTAINER_MEMORY_LIMIT);
+  args.push('--cpus', CONTAINER_CPU_LIMIT);
+  args.push('--pids-limit', CONTAINER_PIDS_LIMIT);
+
+  // Prevent privilege escalation inside container
+  args.push('--security-opt', 'no-new-privileges');
+
+  // Drop all Linux capabilities — minimizes kernel attack surface for container escape
+  args.push('--cap-drop', 'ALL');
+
+  // Limit /tmp to 512MB with noexec to prevent disk exhaustion and code execution
+  args.push('--tmpfs', '/tmp:size=512m,noexec');
+
+  // Network: main gets nanoclaw-net (inter-container access for yt-transcript-api etc.)
+  // Student containers also get nanoclaw-net for now (YouTube transcript needs it).
+  // TODO: create a restricted network that only routes to approved services.
+  if (isMain) {
+    args.push('--network', 'nanoclaw-net');
+  } else {
+    args.push('--network', 'nanoclaw-net');
+  }
 
   // Docker: -v with :ro suffix for readonly
   for (const mount of mounts) {
@@ -284,7 +327,7 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const containerArgs = buildContainerArgs(mounts, containerName, input.isMain);
 
   logger.debug(
     {
@@ -311,6 +354,35 @@ export async function runContainerAgent(
 
   const logsDir = path.join(GROUPS_DIR, group.folder, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
+
+  // Prune expired memories before building context
+  try { pruneExpiredMemories(); } catch { /* non-fatal */ }
+
+  // Write memory context before container starts (pre-flight injection)
+  const memCtxPath = path.join(groupDir, 'memory_context.md');
+  try {
+    const memCtx = buildMemoryContext(input.chatJid, group.folder, input.prompt);
+    if (memCtx) {
+      fs.writeFileSync(memCtxPath, memCtx, 'utf-8');
+    } else {
+      try { fs.unlinkSync(memCtxPath); } catch { /* ok */ }
+    }
+  } catch (err) {
+    logger.warn({ err, group: group.folder }, 'Failed to build memory context');
+    try { fs.unlinkSync(memCtxPath); } catch { /* ok */ }
+  }
+
+  // Write full memory store for in-session query (memory_query tool)
+  try {
+    const exportData = buildMemoryExport(group.folder, input.chatJid);
+    fs.writeFileSync(
+      path.join(groupDir, 'memory_store.json'),
+      JSON.stringify(exportData),
+      'utf-8',
+    );
+  } catch (err) {
+    logger.warn({ err, group: group.folder }, 'Failed to write memory_store.json');
+  }
 
   return new Promise((resolve) => {
     const container = spawn('docker', containerArgs, {

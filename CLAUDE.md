@@ -21,8 +21,8 @@ WhatsApp → SQLite → Message Loop → Docker Container → Claude Agent SDK (
 | Role | Model | When |
 |------|-------|------|
 | Daily TA conversations | Claude Haiku 4.5 | 80%+ of interactions |
-| Complex reasoning / eval | Claude Sonnet 4 | Deep concepts, code review, Shadow Evaluator |
-| Voice interview | Nova Sonic | Mock interview sessions (Phase 3) |
+| Complex reasoning / eval | Claude Sonnet 4.6 | Deep concepts, code review, Shadow Evaluator |
+| Voice interview | Nova 2 Sonic | Mock interview sessions (Phase 3) |
 | Graph construction | DeepSeek V3.2 | Offline LeanRAG entity/relation extraction |
 | Embeddings | Cohere Embed v4 | LeanRAG entity anchoring + clustering |
 
@@ -188,9 +188,10 @@ TAs ask students about homework code AND weekly concepts. Students must:
 ### PHASE 3: Voice Interview + Evaluation
 *Goal: Replace text-based mock interview with real-time voice. Prove TAi is more effective than a chatbot.*
 
-#### 3A. Nova Sonic Voice Interview
+#### 3A. Nova 2 Sonic Voice Interview
 - [ ] Clone aws-samples/sample-voicebot-nova-sonic as starting point
-- [ ] Web frontend: Socket.IO + AudioWorklet + 16kHz mono PCM → Nova Sonic (Bedrock)
+- [ ] Web frontend: Socket.IO + AudioWorklet + 16kHz mono PCM → Nova 2 Sonic (Bedrock, `amazon.nova-2-sonic-v1:0`)
+- [ ] Async tool calling (v2 feature): Shadow Evaluator + LeanRAG queries run without pausing conversation
 - [ ] Tool use integration:
   - `query_knowledge_base(topic, difficulty)` → LeanRAG (Phase 2)
   - `get_student_context(student_id)` → reads COMPETENCY.md
@@ -199,9 +200,9 @@ TAs ask students about homework code AND weekly concepts. Students must:
 - [ ] WhatsApp trigger: student sends "@TAi mock interview" → agent replies with web link
 
 #### 3B. Shadow Evaluator
-- [ ] During interview: Nova Sonic → tool call → Claude Sonnet 4 (text) evaluates each answer
+- [ ] During interview: Nova 2 Sonic → async tool call → Claude Sonnet 4 (text) evaluates each answer
 - [ ] Sonnet returns: accuracy score + missed concepts + suggested follow-up direction + difficulty adjustment
-- [ ] Nova Sonic naturally adjusts next question based on evaluation
+- [ ] Nova 2 Sonic naturally adjusts next question based on evaluation (async = no conversational pause)
 - [ ] Student never sees the evaluation happening — only hears natural follow-up questions
 - [ ] Interview rubric: verbal_clarity, technical_accuracy, depth_of_reasoning, problem_solving_process (1-5 each)
 
@@ -225,7 +226,7 @@ TAs ask students about homework code AND weekly concepts. Students must:
 - [ ] Demo format: side-by-side comparison with "thinking panel" showing agent's reasoning
 - [ ] Competency heat map visualization showing progression over time
 
-**Phase 3 Milestone:** Student does a 15-minute voice mock interview on Raft consensus. Nova Sonic asks questions grounded in LeanRAG course content, adapted to student's COMPETENCY.md weak spots. Shadow Evaluator (Sonnet) scores each answer in real-time, adjusting difficulty. After the interview, comprehensive feedback written to COMPETENCY.md with all four dimensions updated. Professor Coady reviews the session transcript and rubric scores on the dashboard. Side-by-side evaluation shows the agentic TA asked follow-up questions targeting specific misconceptions while the chatbot baseline asked generic questions regardless of student state.
+**Phase 3 Milestone:** Student does a 15-minute voice mock interview on Raft consensus. Nova 2 Sonic asks questions grounded in LeanRAG course content, adapted to student's COMPETENCY.md weak spots. Shadow Evaluator (Sonnet) scores each answer via async tool calls — no conversational pauses, difficulty adjusts seamlessly. Nova 2 Sonic adapts tone based on how the student speaks (hesitant → encouraging, confident → challenging). After the interview, comprehensive feedback written to COMPETENCY.md with all four dimensions updated. Professor Coady reviews the session transcript and rubric scores on the dashboard. Side-by-side evaluation shows the agentic TA asked follow-up questions targeting specific misconceptions while the chatbot baseline asked generic questions regardless of student state.
 
 ---
 

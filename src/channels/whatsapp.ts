@@ -1,4 +1,3 @@
-import { exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -14,6 +13,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 
 import { ASSISTANT_HAS_OWN_NUMBER, ASSISTANT_NAME, DATA_DIR, STORE_DIR } from '../config.js';
+import { transcribeAudio } from '../transcription.js';
 import {
   getLastGroupSync,
   setLastGroupSync,
@@ -25,9 +25,8 @@ import { Channel, OnInboundMessage, OnChatMetadata, RegisteredGroup } from '../t
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_MEDIA_SIZE = 10 * 1024 * 1024; // 10 MB
 
-const SUPPORTED_MEDIA_TYPES = ['imageMessage', 'documentMessage', 'stickerMessage'] as const;
+const SUPPORTED_MEDIA_TYPES = ['imageMessage', 'documentMessage', 'stickerMessage', 'audioMessage'] as const;
 const UNSUPPORTED_MEDIA_LABELS: Record<string, string> = {
-  audioMessage: 'Voice note — audio not yet supported',
   videoMessage: 'Video — not yet supported',
 };
 
@@ -48,6 +47,10 @@ export class WhatsAppChannel implements Channel {
   private flushing = false;
   private groupSyncTimerStarted = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Recent messages for dedup — agent sometimes sends via send_message AND text output */
+  private recentlySent = new Map<string, { prefix: string; time: number }>();
+  /** Track message IDs sent by the bot to filter out echoes on shared-number setups */
+  private sentByBot = new Set<string>();
 
   private opts: WhatsAppChannelOpts;
 
@@ -89,7 +92,7 @@ export class WhatsAppChannel implements Channel {
       },
       printQRInTerminal: false,
       logger,
-      browser: Browsers.macOS('Chrome'),
+      browser: Browsers.ubuntu('Chrome'),
     });
 
     this.sock.ev.on('connection.update', (update) => {
@@ -99,9 +102,6 @@ export class WhatsAppChannel implements Channel {
         const msg =
           'WhatsApp authentication required. Run /setup in Claude Code.';
         logger.error(msg);
-        exec(
-          `osascript -e 'display notification "${msg}" with title "NanoClaw" sound name "Basso"'`,
-        );
         setTimeout(() => process.exit(1), 1000);
       }
 
@@ -220,6 +220,17 @@ export class WhatsAppChannel implements Channel {
             msg.message?.documentMessage?.caption ||
             '';
 
+          // Detect reaction messages — skip bot's own reaction echoes
+          const reactionMsg = extractMessageContent(msg.message)?.reactionMessage;
+          if (reactionMsg) {
+            if (!reactionMsg.text) continue; // Reaction removed
+            const isBotReaction = ASSISTANT_HAS_OWN_NUMBER
+              ? msg.key.fromMe
+              : this.sentByBot.has(msg.key.id || '');
+            if (isBotReaction) continue;
+            content = `[Student reacted with ${reactionMsg.text} to message ${reactionMsg.key?.id || 'unknown'}]`;
+          }
+
           // Include quoted message context when student replies to a specific message
           const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
           if (quoted) {
@@ -232,18 +243,46 @@ export class WhatsAppChannel implements Channel {
             }
           }
 
-          // Handle supported media (image, document, sticker)
-          const mediaPath = await this.downloadMedia(msg, group.folder);
+          // Handle supported media (image, document, sticker, audio)
+          // Skip media processing for bot-sent messages (e.g. bot-sent voice notes/images).
+          // On shared-number setups, fromMe is true for both user and bot, so check sentByBot.
+          const isBotSent = ASSISTANT_HAS_OWN_NUMBER ? msg.key.fromMe : this.sentByBot.has(msg.key.id || '');
+          const mediaPath = isBotSent ? null : await this.downloadMedia(msg, group.folder);
           if (mediaPath) {
             const inner = extractMessageContent(msg.message);
-            let label = 'an image';
-            if (inner?.stickerMessage) label = 'a sticker';
-            else if (inner?.documentMessage) {
-              const mime = inner.documentMessage.mimetype || 'application/octet-stream';
-              label = `a document (${mime})`;
+
+            if (inner?.audioMessage) {
+              // Transcribe voice note via Amazon Transcribe
+              try {
+                const hostPath = path.join(DATA_DIR, 'ipc', group.folder, 'media', path.basename(mediaPath));
+                const transcription = await transcribeAudio(hostPath);
+                const voiceRef = `[Voice note transcription: "${transcription}"]`;
+                content = content ? `${content}\n${voiceRef}` : voiceRef;
+              } catch (err) {
+                logger.warn({ err, msgId: msg.key.id }, 'Failed to transcribe voice note');
+                const voiceRef = `[Voice note received — transcription failed. Audio saved at: ${mediaPath}]`;
+                content = content ? `${content}\n${voiceRef}` : voiceRef;
+              }
+            } else {
+              let label = 'an image';
+              let hint = '';
+              if (inner?.stickerMessage) {
+                label = 'a sticker';
+              } else if (inner?.documentMessage) {
+                const mime = inner.documentMessage.mimetype || 'application/octet-stream';
+                if (mime === 'application/pdf') {
+                  label = 'a PDF document';
+                  hint = ' For large PDFs, use the pages parameter (e.g., pages: "1-5").';
+                } else if (mime.includes('zip') || mime.includes('tar') || mime.includes('gzip')) {
+                  label = `an archive (${mime})`;
+                  hint = ' Use Bash to extract it (unzip for .zip, tar for .tar/.tar.gz).';
+                } else {
+                  label = `a document (${mime})`;
+                }
+              }
+              const mediaRef = `[User sent ${label}. Use your Read tool to view: ${mediaPath}${hint}]`;
+              content = content ? `${content}\n${mediaRef}` : mediaRef;
             }
-            const mediaRef = `[User sent ${label}. Use your Read tool to view: ${mediaPath}]`;
-            content = content ? `${content}\n${mediaRef}` : mediaRef;
           } else {
             // Check for unsupported media types (audio, video)
             const inner = extractMessageContent(msg.message);
@@ -268,7 +307,7 @@ export class WhatsAppChannel implements Channel {
           // (even in DMs/self-chat) so we check for that.
           const isBotMessage = ASSISTANT_HAS_OWN_NUMBER
             ? fromMe
-            : content.startsWith(`${ASSISTANT_NAME}:`);
+            : content.startsWith(`${ASSISTANT_NAME}:`) || this.sentByBot.has(msg.key.id || '');
 
           this.opts.onMessage(chatJid, {
             id: msg.key.id || '',
@@ -285,6 +324,12 @@ export class WhatsAppChannel implements Channel {
     });
   }
 
+  private trackSentMessage(id: string): void {
+    this.sentByBot.add(id);
+    // Evict after 60s to avoid unbounded growth
+    setTimeout(() => this.sentByBot.delete(id), 60_000);
+  }
+
   async sendMessage(jid: string, text: string): Promise<void> {
     // Prefix bot messages with assistant name so users know who's speaking.
     // On a shared number, prefix is also needed in DMs (including self-chat)
@@ -294,13 +339,31 @@ export class WhatsAppChannel implements Channel {
       ? text
       : `${ASSISTANT_NAME}: ${text}`;
 
+    // Dedup: agent sometimes sends the same response via send_message tool AND
+    // text output. Suppress the second copy if same prefix within 10s.
+    const now = Date.now();
+    const dedupPrefix = text.slice(0, 80).toLowerCase().replace(/\s+/g, ' ');
+    const recent = this.recentlySent.get(jid);
+    if (recent && now - recent.time < 10_000 && recent.prefix === dedupPrefix) {
+      logger.info({ jid, length: prefixed.length }, 'Duplicate message suppressed (send_message + text output)');
+      return;
+    }
+    this.recentlySent.set(jid, { prefix: dedupPrefix, time: now });
+    // Evict stale entries periodically
+    if (this.recentlySent.size > 50) {
+      for (const [k, v] of this.recentlySent) {
+        if (now - v.time > 30_000) this.recentlySent.delete(k);
+      }
+    }
+
     if (!this.connected) {
       this.outgoingQueue.push({ jid, text: prefixed });
       logger.info({ jid, length: prefixed.length, queueSize: this.outgoingQueue.length }, 'WA disconnected, message queued');
       return;
     }
     try {
-      await this.sock.sendMessage(jid, { text: prefixed });
+      const sent = await this.sock.sendMessage(jid, { text: prefixed });
+      if (sent?.key?.id) this.trackSentMessage(sent.key.id);
       logger.info({ jid, length: prefixed.length }, 'Message sent');
     } catch (err) {
       // If send fails, queue it for retry
@@ -325,10 +388,51 @@ export class WhatsAppChannel implements Channel {
     this.sock?.end(undefined);
   }
 
+  async sendReaction(jid: string, messageId: string, emoji: string): Promise<void> {
+    try {
+      const sent = await this.sock.sendMessage(jid, {
+        react: { text: emoji, key: { remoteJid: jid, id: messageId } },
+      });
+      if (sent?.key?.id) this.trackSentMessage(sent.key.id);
+      logger.info({ jid, messageId, emoji }, 'Reaction sent');
+    } catch (err) {
+      logger.warn({ jid, messageId, emoji, err }, 'Failed to send reaction');
+    }
+  }
+
+  async sendAudioMessage(jid: string, buffer: Buffer): Promise<void> {
+    try {
+      const sent = await this.sock.sendMessage(jid, {
+        audio: buffer,
+        ptt: true,
+        mimetype: 'audio/ogg; codecs=opus',
+      });
+      if (sent?.key?.id) this.trackSentMessage(sent.key.id);
+      logger.info({ jid, size: buffer.length }, 'Audio message sent');
+    } catch (err) {
+      logger.warn({ jid, err }, 'Failed to send audio message');
+    }
+  }
+
+  async sendImageMessage(jid: string, buffer: Buffer, caption?: string): Promise<void> {
+    try {
+      const sent = await this.sock.sendMessage(jid, {
+        image: buffer,
+        caption: caption || undefined,
+        mimetype: 'image/png',
+      });
+      if (sent?.key?.id) this.trackSentMessage(sent.key.id);
+      logger.info({ jid, size: buffer.length, hasCaption: !!caption }, 'Image message sent');
+    } catch (err) {
+      logger.warn({ jid, err }, 'Failed to send image message');
+    }
+  }
+
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
     try {
       const status = isTyping ? 'composing' : 'paused';
       logger.debug({ jid, status }, 'Sending presence update');
+      await this.sock.presenceSubscribe(jid);
       await this.sock.sendPresenceUpdate(status, jid);
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to update typing status');
@@ -453,11 +557,19 @@ export class WhatsAppChannel implements Channel {
       'application/msword': 'doc',
       'application/vnd.ms-excel': 'xls',
       'text/plain': 'txt',
+      'audio/ogg; codecs=opus': 'ogg',
+      'audio/ogg': 'ogg',
+      'audio/mpeg': 'mp3',
+      'application/zip': 'zip',
+      'application/x-tar': 'tar',
+      'application/gzip': 'tar.gz',
+      'application/x-gzip': 'tar.gz',
     };
     if (mime && map[mime]) return map[mime];
     // Fallback by media type
     if (mediaType === 'imageMessage') return 'jpg';
     if (mediaType === 'stickerMessage') return 'webp';
+    if (mediaType === 'audioMessage') return 'ogg';
     if (mediaType === 'documentMessage') return 'bin';
     return 'bin';
   }

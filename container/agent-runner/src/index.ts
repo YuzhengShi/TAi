@@ -13,6 +13,7 @@
  *   Final marker after loop ends signals completion.
  */
 
+import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { query, HookCallback, PreCompactHookInput, PreToolUseHookInput } from '@anthropic-ai/claude-agent-sdk';
@@ -26,6 +27,8 @@ interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   secrets?: Record<string, string>;
+  canvasUserId?: string;
+  githubUsername?: string;
 }
 
 interface ContainerOutput {
@@ -245,13 +248,65 @@ const SECRET_ENV_VARS = [
   'AWS_ACCESS_KEY_ID',
   'AWS_SECRET_ACCESS_KEY',
   'AWS_SESSION_TOKEN',
+  'CANVAS_API_TOKEN',
+  'GITHUB_TOKEN',
 ];
 
-function createSanitizeBashHook(): HookCallback {
+// Dangerous commands blocked for non-main containers.
+// These patterns are checked against the raw command string.
+const BLOCKED_COMMANDS: RegExp[] = [
+  // Destructive filesystem operations
+  /\brm\s+(-[^\s]*\s+)*-[^\s]*r[^\s]*\s+\//,  // rm -rf / (anything starting from root)
+  /\bmkfs\b/,
+  /\bdd\b.*\bof\s*=\s*\/dev\//,
+  // Outbound network tools (data exfiltration, proxy attacks)
+  /\bcurl\b/,
+  /\bwget\b/,
+  /\bncat?\b/,           // nc / ncat
+  /\bsocat\b/,
+  /\btelnet\b/,
+  /\bpython3?\b.*\b(http\.server|SimpleHTTPServer|requests\.|urllib|socket\b|aiohttp|httpx)/,
+  /\bnode\b.*\b(http|https|net|fetch)\b/,
+  // Indirect execution (blocklist bypass via encoding or eval)
+  /\bbase64\b.*\|\s*(ba)?sh\b/,           // base64 -d | bash
+  /\beval\b/,                              // eval "$cmd"
+  /\bsource\s+\/dev\/stdin\b/,            // source /dev/stdin (pipe to shell)
+  /\b(ba)?sh\s+-c\s.*\$[({]/,             // sh -c "...$(...)" or sh -c "...${...}"
+];
+
+function createSanitizeBashHook(isMain: boolean): HookCallback {
   return async (input, _toolUseId, _context) => {
     const preInput = input as PreToolUseHookInput;
     const command = (preInput.tool_input as { command?: string })?.command;
     if (!command) return {};
+
+    // Block attempts to read sensitive files via shell commands
+    // Broad match: any command mentioning .env/.db files with common read/copy/edit tools
+    if (/\/proc\/[^\s]*environ/i.test(command) ||
+        /\.(env|db|sqlite)\b/.test(command) && /(cat|head|tail|less|more|strings|xxd|hexdump|sqlite3|cp|mv|vi|vim|nano|sed|awk|grep|sort|tee|dd|tar|zip|base64)\b/.test(command)) {
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          decision: 'block' as const,
+          reason: 'Access to sensitive files (.env, .db, /proc) is blocked.',
+        },
+      };
+    }
+
+    // Non-main containers: block dangerous and network commands
+    if (!isMain) {
+      for (const pattern of BLOCKED_COMMANDS) {
+        if (pattern.test(command)) {
+          return {
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse',
+              decision: 'block' as const,
+              reason: `Command blocked for security: matches restricted pattern. If you need network access, use the provided MCP tools (canvas_query, github_query, youtube_transcript, etc.) instead.`,
+            },
+          };
+        }
+      }
+    }
 
     const unsetPrefix = `unset ${SECRET_ENV_VARS.join(' ')} 2>/dev/null; `;
     return {
@@ -263,6 +318,173 @@ function createSanitizeBashHook(): HookCallback {
         },
       },
     };
+  };
+}
+
+// Sensitive file patterns blocked from Read tool (all containers, including main).
+// Even admin agents shouldn't read these — prevents prompt injection from leaking secrets.
+const SENSITIVE_FILE_PATTERNS: RegExp[] = [
+  /^\/proc\/.*\/(environ|cmdline)$/i,     // procfs secrets
+  /\/\.env$/,                               // .env files
+  /\/\.env\..+$/,                           // .env.local, .env.production, etc.
+  /\/nanoclaw\.db$/,                        // SQLite database (all messages, groups, sessions)
+  /\/nanoclaw\.db-(wal|shm)$/,             // SQLite WAL/SHM files
+];
+
+function createSensitiveFileReadHook(): HookCallback {
+  return async (input, _toolUseId, _context) => {
+    const preInput = input as PreToolUseHookInput;
+    const filePath = (preInput.tool_input as { file_path?: string })?.file_path;
+    if (!filePath) return {};
+
+    for (const pattern of SENSITIVE_FILE_PATTERNS) {
+      if (pattern.test(filePath)) {
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            decision: 'block' as const,
+            reason: 'This file contains sensitive data and cannot be read directly.',
+          },
+        };
+      }
+    }
+    return {};
+  };
+}
+
+/** Guard WebFetch for non-main containers: rate limit + block private/internal URLs. */
+function createWebFetchGuardHook(maxCalls: number): HookCallback {
+  let callCount = 0;
+  // Private/internal IP ranges and localhost — prevents SSRF to internal services
+  const PRIVATE_URL_PATTERNS: RegExp[] = [
+    /^https?:\/\/localhost\b/i,
+    /^https?:\/\/127\./,
+    /^https?:\/\/10\./,
+    /^https?:\/\/172\.(1[6-9]|2\d|3[01])\./,
+    /^https?:\/\/192\.168\./,
+    /^https?:\/\/0\./,
+    /^https?:\/\/\[::1\]/,
+    /^file:/i,
+  ];
+
+  return async (input, _toolUseId, _context) => {
+    const preInput = input as PreToolUseHookInput;
+    const url = (preInput.tool_input as { url?: string })?.url || '';
+
+    // Rate limit
+    callCount++;
+    if (callCount > maxCalls) {
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          decision: 'block' as const,
+          reason: `WebFetch rate limit exceeded: max ${maxCalls} calls per session.`,
+        },
+      };
+    }
+
+    // Block private/internal URLs
+    for (const pattern of PRIVATE_URL_PATTERNS) {
+      if (pattern.test(url)) {
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            decision: 'block' as const,
+            reason: 'Cannot fetch internal/private URLs. Only public web pages are accessible.',
+          },
+        };
+      }
+    }
+
+    return {};
+  };
+}
+
+/** Block writes larger than maxBytes (non-main only). */
+function createFileSizeGuardHook(maxBytes: number): HookCallback {
+  return async (input, _toolUseId, _context) => {
+    const preInput = input as PreToolUseHookInput;
+    const toolInput = preInput.tool_input as Record<string, unknown>;
+    const content = (toolInput.content as string) || (toolInput.new_string as string) || '';
+    if (content.length > maxBytes) {
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          decision: 'block' as const,
+          reason: `File content too large (${(content.length / 1024 / 1024).toFixed(1)}MB). Maximum allowed: ${(maxBytes / 1024 / 1024).toFixed(0)}MB.`,
+        },
+      };
+    }
+    return {};
+  };
+}
+
+/** Block writes if workspace directory exceeds maxMB total (non-main only). */
+function createWorkspaceSizeGuardHook(maxMB: number): HookCallback {
+  return async (_input, _toolUseId, _context) => {
+    try {
+      const output = execSync('du -sm /workspace/group', { timeout: 3000, encoding: 'utf-8' });
+      const sizeMB = parseInt(output.trim().split(/\s+/)[0], 10);
+      if (sizeMB >= maxMB) {
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            decision: 'block' as const,
+            reason: `Workspace is full (${sizeMB}MB / ${maxMB}MB limit). Remove unnecessary files before writing new ones.`,
+          },
+        };
+      }
+    } catch {
+      // If du fails or times out, allow the write (defense in depth: tmpfs + file size limits still apply)
+    }
+    return {};
+  };
+}
+
+/**
+ * Hook to prevent suspicious bulk modifications to COMPETENCY.md.
+ * Normal teaching updates 1-2 concepts at a time with small increments.
+ * A student tricking the agent into setting all confidences to 1.0 is detectable.
+ */
+function createCompetencyGuardHook(isMain: boolean): HookCallback {
+  return async (input, _toolUseId, _context) => {
+    if (isMain) return {}; // Admin can do anything
+
+    const preInput = input as PreToolUseHookInput;
+    const toolInput = preInput.tool_input as Record<string, unknown>;
+
+    // Check Edit tool: old_string + new_string
+    // Check Write tool: content (full file rewrite)
+    const filePath = (toolInput.file_path as string) || '';
+    if (!filePath.endsWith('COMPETENCY.md')) return {};
+
+    // For Write (full rewrite), check the content
+    const content = (toolInput.content as string) || '';
+    // For Edit, check the new_string
+    const newString = (toolInput.new_string as string) || '';
+    const textToCheck = content || newString;
+    if (!textToCheck) return {};
+
+    // Count high-confidence values being set (>= 0.8)
+    const confidenceMatches = textToCheck.match(/confidence:\s*([\d.]+)/g) || [];
+    let highConfCount = 0;
+    for (const match of confidenceMatches) {
+      const val = parseFloat(match.replace('confidence:', '').trim());
+      if (val >= 0.8) highConfCount++;
+    }
+
+    // Block if 3+ concepts are being set to high confidence in one operation
+    if (highConfCount >= 3) {
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          decision: 'block' as const,
+          reason: `Blocked: setting ${highConfCount} concepts to confidence >= 0.8 in a single edit is not allowed. Mastery scores must be updated incrementally based on demonstrated understanding, not in bulk. Update concepts one at a time after each interaction.`,
+        },
+      };
+    }
+
+    return {};
   };
 }
 
@@ -362,6 +584,14 @@ function buildMcpServers(
   containerInput: ContainerInput,
   sdkEnv: Record<string, string | undefined>,
 ) {
+  // AWS credentials for MCP tools that call boto3 scripts (tts.py, image_gen.py)
+  const awsEnv = Object.fromEntries(
+    ['AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_ACCESS_KEY_ID',
+     'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN']
+      .filter(k => sdkEnv[k])
+      .map(k => [k, sdkEnv[k]!])
+  );
+
   const servers: Record<string, { command: string; args: string[]; env: Record<string, string> }> = {
     nanoclaw: {
       command: 'node',
@@ -370,6 +600,23 @@ function buildMcpServers(
         NANOCLAW_CHAT_JID: containerInput.chatJid,
         NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
         NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+        NANOCLAW_IS_SCHEDULED_TASK: containerInput.isScheduledTask ? '1' : '0',
+        // Identity binding (from trusted DB — containers cannot modify)
+        ...(containerInput.canvasUserId ? { NANOCLAW_CANVAS_USER_ID: containerInput.canvasUserId } : {}),
+        ...(containerInput.githubUsername ? { NANOCLAW_GITHUB_USERNAME: containerInput.githubUsername } : {}),
+        ...awsEnv,
+        // Canvas LMS + GitHub integration credentials
+        ...(sdkEnv['CANVAS_API_TOKEN'] ? { CANVAS_API_TOKEN: sdkEnv['CANVAS_API_TOKEN'] } : {}),
+        ...(sdkEnv['CANVAS_BASE_URL'] ? { CANVAS_BASE_URL: sdkEnv['CANVAS_BASE_URL'] } : {}),
+        ...(sdkEnv['CANVAS_COURSE_ID'] ? { CANVAS_COURSE_ID: sdkEnv['CANVAS_COURSE_ID'] } : {}),
+        ...(sdkEnv['GITHUB_TOKEN'] ? { GITHUB_TOKEN: sdkEnv['GITHUB_TOKEN'] } : {}),
+        ...(sdkEnv['GITHUB_TOKEN_PUBLIC'] ? { GITHUB_TOKEN_PUBLIC: sdkEnv['GITHUB_TOKEN_PUBLIC'] } : {}),
+        ...(sdkEnv['GITHUB_BASE_URL'] ? { GITHUB_BASE_URL: sdkEnv['GITHUB_BASE_URL'] } : {}),
+        ...(sdkEnv['GITHUB_ALLOWED_ORGS'] ? { GITHUB_ALLOWED_ORGS: sdkEnv['GITHUB_ALLOWED_ORGS'] } : {}),
+        ...(sdkEnv['YOUTUBE_API_KEY'] ? { YOUTUBE_API_KEY: sdkEnv['YOUTUBE_API_KEY'] } : {}),
+        ...(sdkEnv['VOICE_INTERVIEW_SECRET'] ? { VOICE_INTERVIEW_SECRET: sdkEnv['VOICE_INTERVIEW_SECRET'] } : {}),
+        ...(sdkEnv['VOICE_BASE_URL'] ? { VOICE_BASE_URL: sdkEnv['VOICE_BASE_URL'] } : {}),
+        ...(sdkEnv['VOICE_PORT'] ? { VOICE_PORT: sdkEnv['VOICE_PORT'] } : {}),
       },
     },
   };
@@ -385,12 +632,7 @@ function buildMcpServers(
       args: ['-m', 'leanrag.mcp_server'],
       env: {
         PYTHONPATH: path.dirname(leanragRoot),
-        ...(Object.fromEntries(
-          ['AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_ACCESS_KEY_ID',
-           'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN']
-            .filter(k => sdkEnv[k])
-            .map(k => [k, sdkEnv[k]!])
-        )),
+        ...awsEnv,
       },
     };
   } else {
@@ -408,7 +650,7 @@ async function runQuery(
   sdkEnv: Record<string, string | undefined>,
   stdinReader: StdinReader,
   resumeAt?: string,
-): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean }> {
+): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean; had500Error: boolean; messageCount: number }> {
   const stream = new MessageStream();
   stream.push(prompt);
 
@@ -443,6 +685,7 @@ async function runQuery(
   let lastAssistantUuid: string | undefined;
   let messageCount = 0;
   let resultCount = 0;
+  let had500Error = false;
 
   // Load global CLAUDE.md as additional system context (shared across all groups).
   // Main also loads it so admin can test the teaching persona in the same DM.
@@ -479,7 +722,11 @@ async function runQuery(
   })} at ${now.toLocaleTimeString('en-US', {
     hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz, timeZoneName: 'short',
   })}.\n\n`;
-  const systemAppend = dateTimeHeader + (globalClaudeMd || '');
+  const memCtxPath = '/workspace/group/memory_context.md';
+  const memoryContext = fs.existsSync(memCtxPath)
+    ? '\n\n' + fs.readFileSync(memCtxPath, 'utf-8') + '\n\n'
+    : '';
+  const systemAppend = dateTimeHeader + memoryContext + (globalClaudeMd || '');
 
   for await (const message of query({
     prompt: stream,
@@ -492,9 +739,11 @@ async function runQuery(
       allowedTools: [
         'Bash',
         'Read', 'Write', 'Edit', 'Glob', 'Grep',
-        'WebSearch', 'WebFetch',
+        'WebSearch',
+        'WebFetch',
         'Task', 'TaskOutput', 'TaskStop',
-        'TeamCreate', 'TeamDelete', 'SendMessage',
+        ...(containerInput.isMain ? ['TeamCreate', 'TeamDelete'] : []), // Subagents: main only (hook bypass)
+        'SendMessage',
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
@@ -507,7 +756,24 @@ async function runQuery(
       mcpServers: buildMcpServers(mcpServerPath, containerInput, sdkEnv),
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook()] }],
-        PreToolUse: [{ matcher: 'Bash', hooks: [createSanitizeBashHook()] }],
+        PreToolUse: [
+          { matcher: 'Bash', hooks: [createSanitizeBashHook(containerInput.isMain)] },
+          { matcher: 'Read', hooks: [createSensitiveFileReadHook()] },
+          { matcher: 'Edit', hooks: [createCompetencyGuardHook(containerInput.isMain)] },
+          { matcher: 'Write', hooks: [createCompetencyGuardHook(containerInput.isMain)] },
+          // Non-main: guard WebFetch (rate limit + block private/internal URLs)
+          ...(!containerInput.isMain ? [{ matcher: 'WebFetch', hooks: [createWebFetchGuardHook(15)] }] : []),
+          // Non-main: limit file write size to 5MB
+          ...(!containerInput.isMain ? [
+            { matcher: 'Write', hooks: [createFileSizeGuardHook(5 * 1024 * 1024)] },
+            { matcher: 'Edit', hooks: [createFileSizeGuardHook(5 * 1024 * 1024)] },
+          ] : []),
+          // Non-main: block writes if workspace exceeds 500MB total
+          ...(!containerInput.isMain ? [
+            { matcher: 'Write', hooks: [createWorkspaceSizeGuardHook(500)] },
+            { matcher: 'Edit', hooks: [createWorkspaceSizeGuardHook(500)] },
+          ] : []),
+        ],
       },
     }
   })) {
@@ -531,7 +797,22 @@ async function runQuery(
 
     if (message.type === 'result') {
       resultCount++;
-      const textResult = 'result' in message ? (message as { result?: string }).result : null;
+      let textResult = 'result' in message ? (message as { result?: string }).result : null;
+      // Detect Bedrock 500 errors (context overflow) — abort the query immediately
+      // and signal caller to reset session. User gets a friendly retry message instead.
+      if (textResult && /^API Error:\s*500\b/.test(textResult)) {
+        log(`Result #${resultCount}: Bedrock 500 error detected, aborting query`);
+        had500Error = true;
+        stream.end();
+        break;
+      }
+      // Strip hallucinated Human turns — the model sometimes echoes the
+      // XML message input format as part of its output, especially after
+      // tool use when follow-up messages are piped mid-session.
+      if (textResult && /Human:\s*<messages>/.test(textResult)) {
+        log(`Result #${resultCount}: stripping hallucinated Human turn from output`);
+        textResult = textResult.replace(/Human:\s*<messages>[\s\S]*/g, '').trim() || null;
+      }
       log(`Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
       writeOutput({
         status: 'success',
@@ -543,7 +824,7 @@ async function runQuery(
 
   stdinPumping = false;
   log(`Query done. Messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}`);
-  return { newSessionId, lastAssistantUuid, closedDuringQuery };
+  return { newSessionId, lastAssistantUuid, closedDuringQuery, had500Error, messageCount };
 }
 
 async function main(): Promise<void> {
@@ -601,16 +882,73 @@ async function main(): Promise<void> {
 
   // Query loop: run query → wait for stdin message → run new query → repeat
   let resumeAt: string | undefined;
-  try {
-    while (true) {
-      log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
+  let queriesOnSession = 0;
+  const MAX_QUERIES_PER_SESSION = 10;
 
-      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, stdinReader, resumeAt);
+  while (true) {
+    // Proactive session cap — force fresh session after N query iterations
+    // to prevent unbounded context growth that leads to Bedrock 500 errors.
+    queriesOnSession++;
+    if (queriesOnSession > MAX_QUERIES_PER_SESSION && sessionId) {
+      log(`Session query cap reached (${queriesOnSession - 1} queries), starting fresh session`);
+      sessionId = undefined;
+      resumeAt = undefined;
+      queriesOnSession = 1;
+    }
+
+    log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'}, queryNum: ${queriesOnSession})...`);
+
+    let queryResult: Awaited<ReturnType<typeof runQuery>> | null = null;
+    try {
+      queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, stdinReader, resumeAt);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+
+      // If stdin is already closed (host shutting down), exit gracefully
+      if (stdinReader.isClosed) {
+        log(`Query crashed during shutdown, exiting: ${errorMessage}`);
+        break;
+      }
+
+      // Crash with active session — likely context overflow. Reset and continue.
+      if (sessionId) {
+        log(`Query crashed with active session, resetting: ${errorMessage}`);
+        writeOutput({
+          status: 'success',
+          result: "sorry, my memory got too full — I've cleared my context and I'm ready to go. could you send that last message again?",
+          newSessionId: sessionId,
+        });
+        sessionId = undefined;
+        resumeAt = undefined;
+        queriesOnSession = 0;
+        // Fall through to wait for next stdin message
+      } else {
+        // Fresh session crashed — real error, bail out
+        log(`Agent error: ${errorMessage}`);
+        writeOutput({ status: 'error', result: null, newSessionId: sessionId, error: errorMessage });
+        process.exit(1);
+      }
+    }
+
+    if (queryResult) {
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
       }
       if (queryResult.lastAssistantUuid) {
         resumeAt = queryResult.lastAssistantUuid;
+      }
+
+      // Bedrock 500 detected in results — reset session and notify user
+      if (queryResult.had500Error) {
+        log('Bedrock 500 errors detected in results, resetting session');
+        writeOutput({
+          status: 'success',
+          result: "sorry, my memory got too full — I've cleared my context and I'm ready to go. could you send that last message again?",
+          newSessionId: sessionId,
+        });
+        sessionId = undefined;
+        resumeAt = undefined;
+        queriesOnSession = 0;
       }
 
       // If EOF was detected during the query, exit immediately.
@@ -623,40 +961,30 @@ async function main(): Promise<void> {
 
       // Emit session update so host can track it
       writeOutput({ status: 'success', result: null, newSessionId: sessionId });
+    }
 
-      log('Query ended, waiting for next stdin message...');
+    log('Query ended, waiting for next stdin message...');
 
-      // Wait for the next message or EOF
-      const nextLine = await stdinReader.nextLine();
-      if (nextLine === null) {
-        log('EOF received, exiting');
-        break;
-      }
+    // Wait for the next message or EOF
+    const nextLine = await stdinReader.nextLine();
+    if (nextLine === null) {
+      log('EOF received, exiting');
+      break;
+    }
 
-      try {
-        const msg = JSON.parse(nextLine);
-        if (msg.type === 'message' && msg.text) {
-          log(`Got new message (${msg.text.length} chars), starting new query`);
-          prompt = msg.text;
-        } else {
-          log(`Unknown stdin message type: ${msg.type}, skipping`);
-          continue;
-        }
-      } catch (err) {
-        log(`Failed to parse stdin line: ${err instanceof Error ? err.message : String(err)}`);
+    try {
+      const msg = JSON.parse(nextLine);
+      if (msg.type === 'message' && msg.text) {
+        log(`Got new message (${msg.text.length} chars), starting new query`);
+        prompt = msg.text;
+      } else {
+        log(`Unknown stdin message type: ${msg.type}, skipping`);
         continue;
       }
+    } catch (err) {
+      log(`Failed to parse stdin line: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
     }
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    log(`Agent error: ${errorMessage}`);
-    writeOutput({
-      status: 'error',
-      result: null,
-      newSessionId: sessionId,
-      error: errorMessage
-    });
-    process.exit(1);
   }
 }
 

@@ -169,6 +169,58 @@ describe('stripInternalTags', () => {
       stripInternalTags('response text\n<internal>\nreasoning stuff'),
     ).toBe('response text');
   });
+
+  it('strips individual <message> tags with attributes', () => {
+    expect(
+      stripInternalTags('<message id="abc" sender="Alice" time="1pm">hello</message>'),
+    ).toBe('');
+  });
+
+  it('strips multiple individual <message> tags without wrapper', () => {
+    expect(
+      stripInternalTags(
+        '<message id="1" sender="A" time="t1">hi</message>\n<message id="2" sender="B" time="t2">hey</message>',
+      ),
+    ).toBe('');
+  });
+
+  it('preserves surrounding text when echoed <message> tag is in the middle', () => {
+    expect(
+      stripInternalTags(
+        'Here is my response.\n<message id="abc" sender="Alice" time="1pm">hello</message>\nMore text.',
+      ),
+    ).toBe('Here is my response.\n\nMore text.');
+  });
+
+  it('strips unclosed individual <message> tag to end', () => {
+    expect(
+      stripInternalTags('response\n<message id="abc" sender="Alice" time="1pm">leaked content...'),
+    ).toBe('response');
+  });
+
+  it('preserves response mixed with echoed <message> tag', () => {
+    expect(
+      stripInternalTags(
+        'Great question!\n<message id="x" sender="Bob" time="2pm">student msg</message>',
+      ),
+    ).toBe('Great question!');
+  });
+
+  it('strips hallucinated Human turn and everything after it', () => {
+    expect(
+      stripInternalTags(
+        'Human: <messages>\n<message id="abc" sender="Yuzheng" time="10pm">It\'s so cool!!</message>\n</messages>\n\n🙂 glad you like it! Now — HW2.',
+      ),
+    ).toBe('');
+  });
+
+  it('preserves text before hallucinated Human turn', () => {
+    expect(
+      stripInternalTags(
+        '<internal>reasoning</internal>\nHuman: <messages>\n<message id="x" sender="A" time="1pm">hi</message>\n</messages>\n\nfake response',
+      ),
+    ).toBe('');
+  });
 });
 
 describe('formatOutbound', () => {
@@ -184,6 +236,32 @@ describe('formatOutbound', () => {
     expect(
       formatOutbound('<internal>thinking</internal>The answer is 42'),
     ).toBe('The answer is 42');
+  });
+});
+
+// --- System prompt leakage detection ---
+
+describe('system prompt leakage detection', () => {
+  it('passes normal text through unchanged', () => {
+    expect(formatOutbound('Docker uses images and containers')).toBe('Docker uses images and containers');
+  });
+
+  it('redacts single fingerprint phrase', () => {
+    const result = formatOutbound('The system uses TEACHING_STRATEGIES.md to decide what to do');
+    expect(result).toContain('[redacted]');
+    expect(result).not.toContain('TEACHING_STRATEGIES.md');
+  });
+
+  it('replaces entire output when 3+ fingerprints detected', () => {
+    const leaky = 'The system reads COMPETENCY_PROTOCOL.md and TEACHING_STRATEGIES.md then calls mcp__nanoclaw__ tools';
+    const result = formatOutbound(leaky);
+    expect(result).toContain('confused');
+    expect(result).not.toContain('COMPETENCY_PROTOCOL');
+  });
+
+  it('does not flag normal teaching terms', () => {
+    const normal = 'confidence is about 0.4, and stability is low. Let me explain Docker.';
+    expect(formatOutbound(normal)).toBe(normal);
   });
 });
 

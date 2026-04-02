@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TAi Mock Interview</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f1117;
+      color: #e4e4e7;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      max-width: 500px;
+      width: 100%;
+      padding: 2rem;
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+      color: #fff;
+    }
+    .subtitle {
+      color: #71717a;
+      font-size: 0.875rem;
+      margin-bottom: 2rem;
+    }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.75rem 0;
+      border-bottom: 1px solid #27272a;
+      font-size: 0.9rem;
+    }
+    .info-label { color: #a1a1aa; }
+    .info-value { color: #fff; font-weight: 500; }
+    .status {
+      text-align: center;
+      padding: 1rem;
+      margin: 1.5rem 0;
+      border-radius: 8px;
+      font-size: 0.9rem;
+    }
+    .status.loading { background: #1e1b4b; color: #a5b4fc; }
+    .status.connecting { background: #172554; color: #93c5fd; }
+    .status.active { background: #052e16; color: #86efac; }
+    .status.error { background: #450a0a; color: #fca5a5; }
+    .status.disconnected { background: #451a03; color: #fdba74; }
+    .controls {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      margin: 1.5rem 0;
+    }
+    button {
+      padding: 0.75rem 2rem;
+      border-radius: 8px;
+      border: none;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:hover { opacity: 0.85; }
+    #start-btn { background: #22c55e; color: #000; }
+    #end-btn { background: #ef4444; color: #fff; display: none; }
+    .timer {
+      font-size: 2rem;
+      font-weight: 700;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      color: #fff;
+    }
+    .mic-indicator {
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: #3f3f46;
+      display: inline-block;
+      margin-right: 0.5rem;
+      transition: background 0.3s;
+    }
+    .mic-indicator.active {
+      background: #22c55e;
+      box-shadow: 0 0 8px #22c55e80;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 8px #22c55e40; }
+      50% { box-shadow: 0 0 16px #22c55e80; }
+    }
+    #speaking-indicator {
+      text-align: center;
+      color: #71717a;
+      font-size: 0.8rem;
+      display: none;
+    }
+    /* Results */
+    #results { display: none; }
+    .result-card {
+      background: #18181b;
+      border-radius: 8px;
+      padding: 1.25rem;
+      margin-bottom: 1rem;
+    }
+    .result-card h3 {
+      font-size: 0.85rem;
+      color: #a1a1aa;
+      margin-bottom: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .rubric-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+    }
+    .rubric-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.4rem 0;
+    }
+    .rubric-label { color: #a1a1aa; font-size: 0.85rem; }
+    .rubric-score { color: #fff; font-weight: 600; }
+    ul { padding-left: 1.25rem; }
+    li { margin-bottom: 0.25rem; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>TAi Mock Interview</h1>
+    <p class="subtitle">CS6650 Building Scalable Distributed Systems</p>
+
+    <div id="interview-area">
+      <div class="info-row">
+        <span class="info-label">Student</span>
+        <span class="info-value" id="student-name">Loading...</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Assignment</span>
+        <span class="info-value" id="assignment-name">Loading...</span>
+      </div>
+
+      <div id="status" class="status">Ready to start. Use headphones for best audio on mobile.</div>
+
+      <div class="timer" id="timer">00:00</div>
+      <p id="speaking-indicator">
+        <span class="mic-indicator" id="mic-indicator"></span>
+        Listening...
+      </p>
+
+      <div class="controls">
+        <button id="start-btn">Start Interview</button>
+        <button id="end-btn">End Interview</button>
+      </div>
+    </div>
+
+    <div id="results">
+      <h1>Interview Complete</h1>
+      <p class="subtitle">Here's how you did:</p>
+
+      <div class="result-card">
+        <h3>Duration</h3>
+        <p id="result-duration" style="font-size: 1.25rem; font-weight: 600;"></p>
+      </div>
+
+      <div class="result-card">
+        <h3>Rubric Scores</h3>
+        <div class="rubric-grid">
+          <div class="rubric-item">
+            <span class="rubric-label">Verbal Clarity</span>
+            <span class="rubric-score" id="result-clarity"></span>
+          </div>
+          <div class="rubric-item">
+            <span class="rubric-label">Technical Accuracy</span>
+            <span class="rubric-score" id="result-accuracy"></span>
+          </div>
+          <div class="rubric-item">
+            <span class="rubric-label">Depth of Reasoning</span>
+            <span class="rubric-score" id="result-depth"></span>
+          </div>
+          <div class="rubric-item">
+            <span class="rubric-label">Problem Solving</span>
+            <span class="rubric-score" id="result-process"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="result-card">
+        <h3>Strengths</h3>
+        <ul id="result-strengths"></ul>
+      </div>
+
+      <div class="result-card">
+        <h3>Areas to Improve</h3>
+        <ul id="result-weaknesses"></ul>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/interview.js"></script>
+</body>
+</html>

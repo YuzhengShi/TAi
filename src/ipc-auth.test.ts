@@ -7,6 +7,7 @@ import {
   getRegisteredGroup,
   getTaskById,
   setRegisteredGroup,
+  updateGroupIdentity,
 } from './db.js';
 import { processTaskIpc, IpcDeps } from './ipc.js';
 import { RegisteredGroup } from './types.js';
@@ -52,6 +53,9 @@ beforeEach(() => {
 
   deps = {
     sendMessage: async () => {},
+    sendReaction: async () => {},
+    sendAudioMessage: async () => {},
+    sendImageMessage: async () => {},
     registeredGroups: () => groups,
     registerGroup: (jid, group) => {
       groups[jid] = group;
@@ -590,5 +594,102 @@ describe('register_group success', () => {
     );
 
     expect(getRegisteredGroup('partial@g.us')).toBeUndefined();
+  });
+
+  it('register_group stores identity binding fields', async () => {
+    await processTaskIpc(
+      {
+        type: 'register_group',
+        jid: 'student@g.us',
+        name: 'Student',
+        folder: 'student-group',
+        trigger: '@TAi',
+        canvasUserId: '12345',
+        githubUsername: 'student-alice',
+      },
+      'main',
+      true,
+      deps,
+    );
+
+    const group = getRegisteredGroup('student@g.us');
+    expect(group).toBeDefined();
+    expect(group!.canvasUserId).toBe('12345');
+    expect(group!.githubUsername).toBe('student-alice');
+  });
+});
+
+// --- set_student_identity authorization ---
+
+describe('set_student_identity authorization', () => {
+  it('main group can set identity for any group', async () => {
+    await processTaskIpc(
+      {
+        type: 'set_student_identity',
+        targetFolder: 'other-group',
+        canvasUserId: '99999',
+        githubUsername: 'other-gh',
+      },
+      'main',
+      true,
+      deps,
+    );
+
+    const group = getRegisteredGroup('other@g.us');
+    expect(group).toBeDefined();
+    expect(group!.canvasUserId).toBe('99999');
+    expect(group!.githubUsername).toBe('other-gh');
+  });
+
+  it('non-main group can set its own identity (scheduled task)', async () => {
+    await processTaskIpc(
+      {
+        type: 'set_student_identity',
+        canvasUserId: '11111',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+
+    const group = getRegisteredGroup('other@g.us');
+    expect(group).toBeDefined();
+    expect(group!.canvasUserId).toBe('11111');
+  });
+
+  it('non-main group cannot set another groups identity', async () => {
+    await processTaskIpc(
+      {
+        type: 'set_student_identity',
+        targetFolder: 'main',
+        canvasUserId: 'hacked',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+
+    // Main group identity should be unchanged
+    const group = getRegisteredGroup('main@g.us');
+    expect(group!.canvasUserId).toBeUndefined();
+  });
+
+  it('updates only provided fields without clearing others', async () => {
+    // First set canvas ID
+    updateGroupIdentity('other-group', { canvasUserId: '11111' });
+    // Then set github without touching canvas
+    await processTaskIpc(
+      {
+        type: 'set_student_identity',
+        githubUsername: 'alice-gh',
+      },
+      'other-group',
+      false,
+      deps,
+    );
+
+    const group = getRegisteredGroup('other@g.us');
+    expect(group!.canvasUserId).toBe('11111');
+    expect(group!.githubUsername).toBe('alice-gh');
   });
 });

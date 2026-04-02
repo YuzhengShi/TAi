@@ -5,18 +5,39 @@ import { CronExpressionParser } from 'cron-parser';
 
 import {
   DATA_DIR,
+  GROUPS_DIR,
   IPC_POLL_INTERVAL,
   MAIN_GROUP_FOLDER,
   TIMEZONE,
 } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import { createTask, deleteTask, getTaskById, updateGroupIdentity, updateTask } from './db.js';
+import { buildMemoryExport, MemoryFact, storeMemory } from './memory.js';
 import { logger } from './logger.js';
 import { formatOutbound } from './router.js';
 import { RegisteredGroup } from './types.js';
 
+// Audit log for high-risk admin operations (append-only)
+function auditLog(operation: string, details: Record<string, unknown>): void {
+  const logDir = path.join(DATA_DIR, 'audit');
+  fs.mkdirSync(logDir, { recursive: true });
+  const entry = {
+    timestamp: new Date().toISOString(),
+    operation,
+    ...details,
+  };
+  fs.appendFileSync(
+    path.join(logDir, 'admin-operations.jsonl'),
+    JSON.stringify(entry) + '\n',
+  );
+  logger.info({ operation, ...details }, 'AUDIT: admin operation');
+}
+
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendReaction: (jid: string, messageId: string, emoji: string) => Promise<void>;
+  sendAudioMessage: (jid: string, audioBuffer: Buffer) => Promise<void>;
+  sendImageMessage: (jid: string, imageBuffer: Buffer, caption?: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroupMetadata: (force: boolean) => Promise<void>;
@@ -92,6 +113,55 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     { chatJid: data.chatJid, sourceGroup },
                     'Unauthorized IPC message attempt blocked',
                   );
+                }
+              } else if (data.type === 'reaction' && data.chatJid && data.messageId && data.emoji) {
+                const targetGroup = registeredGroups[data.chatJid];
+                if (isMain || (targetGroup && targetGroup.folder === sourceGroup)) {
+                  await deps.sendReaction(data.chatJid, data.messageId, data.emoji);
+                  logger.info({ chatJid: data.chatJid, emoji: data.emoji, sourceGroup }, 'IPC reaction sent');
+                }
+              } else if (data.type === 'voice_message' && data.chatJid && data.audioPath) {
+                const targetGroup = registeredGroups[data.chatJid];
+                if (isMain || (targetGroup && targetGroup.folder === sourceGroup)) {
+                  // Map container path to host path
+                  const relative = (data.audioPath as string).replace(/^\/workspace\/ipc\//, '');
+                  const hostPath = path.join(DATA_DIR, 'ipc', sourceGroup, relative);
+                  const buffer = fs.readFileSync(hostPath);
+                  await deps.sendAudioMessage(data.chatJid, buffer);
+                  logger.info({ chatJid: data.chatJid, sourceGroup, size: buffer.length }, 'IPC voice message sent');
+                  // Clean up the TTS file
+                  try { fs.unlinkSync(hostPath); } catch { /* ignore */ }
+                }
+              } else if (data.type === 'image_message' && data.chatJid && data.imagePath) {
+                const targetGroup = registeredGroups[data.chatJid];
+                if (isMain || (targetGroup && targetGroup.folder === sourceGroup)) {
+                  const relative = (data.imagePath as string).replace(/^\/workspace\/ipc\//, '');
+                  const hostPath = path.join(DATA_DIR, 'ipc', sourceGroup, relative);
+                  const buffer = fs.readFileSync(hostPath);
+                  await deps.sendImageMessage(data.chatJid, buffer, data.caption as string | undefined);
+                  logger.info({ chatJid: data.chatJid, sourceGroup, size: buffer.length }, 'IPC image message sent');
+                  try { fs.unlinkSync(hostPath); } catch { /* ignore */ }
+                }
+              } else if (data.type === 'memory_store' && data.studentFolder && data.fact) {
+                // Verify the agent can only store memories for its own group
+                if (isMain || (data.studentFolder as string) === sourceGroup) {
+                  storeMemory(data.studentFolder as string, data.fact as MemoryFact);
+                  logger.info({ studentFolder: data.studentFolder, sourceGroup }, 'IPC memory stored');
+                  // Refresh memory_store.json so memory_query sees the new entry this session
+                  try {
+                    const folder = data.studentFolder as string;
+                    const chatJid = Object.entries(registeredGroups).find(([, g]) => g.folder === folder)?.[0];
+                    if (chatJid) {
+                      const exportData = buildMemoryExport(folder, chatJid);
+                      fs.writeFileSync(
+                        path.join(GROUPS_DIR, folder, 'memory_store.json'),
+                        JSON.stringify(exportData),
+                        'utf-8',
+                      );
+                    }
+                  } catch { /* best-effort */ }
+                } else {
+                  logger.warn({ studentFolder: data.studentFolder, sourceGroup }, 'Unauthorized memory_store attempt blocked');
                 }
               }
               fs.unlinkSync(filePath);
@@ -173,6 +243,11 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For register_group + set_student_identity
+    canvasUserId?: string;
+    githubUsername?: string;
+    // For set_student_identity
+    targetFolder?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -266,6 +341,11 @@ export async function processTaskIpc(
           status: 'active',
           created_at: new Date().toISOString(),
         });
+        auditLog('schedule_task', {
+          taskId, sourceGroup, targetFolder, scheduleType,
+          scheduleValue: data.schedule_value, contextMode,
+          promptPreview: data.prompt.slice(0, 200),
+        });
         logger.info(
           { taskId, sourceGroup, targetFolder, contextMode },
           'Task created via IPC',
@@ -313,6 +393,7 @@ export async function processTaskIpc(
       if (data.taskId) {
         const task = getTaskById(data.taskId);
         if (task && (isMain || task.group_folder === sourceGroup)) {
+          auditLog('cancel_task', { sourceGroup, taskId: data.taskId, taskGroup: task.group_folder });
           deleteTask(data.taskId);
           logger.info(
             { taskId: data.taskId, sourceGroup },
@@ -368,12 +449,66 @@ export async function processTaskIpc(
           added_at: new Date().toISOString(),
           containerConfig: data.containerConfig,
           requiresTrigger: data.requiresTrigger,
+          canvasUserId: data.canvasUserId,
+          githubUsername: data.githubUsername,
+        });
+        auditLog('register_group', {
+          sourceGroup, jid: data.jid, name: data.name,
+          folder: data.folder, trigger: data.trigger,
         });
       } else {
         logger.warn(
           { data },
           'Invalid register_group request - missing required fields',
         );
+      }
+      break;
+
+    case 'set_student_identity':
+      // Only main or scheduled tasks can set identity (verified by IPC directory)
+      if (!isMain) {
+        // For non-main, only allow setting own group's identity
+        // (scheduled tasks like bootstrap run in the student's group context)
+        const targetFolder = data.targetFolder || sourceGroup;
+        if (targetFolder !== sourceGroup) {
+          logger.warn(
+            { sourceGroup, targetFolder },
+            'Unauthorized set_student_identity attempt blocked',
+          );
+          break;
+        }
+        if (data.canvasUserId || data.githubUsername) {
+          const updated = updateGroupIdentity(targetFolder, {
+            canvasUserId: data.canvasUserId,
+            githubUsername: data.githubUsername,
+          });
+          if (updated) {
+            logger.info(
+              { targetFolder, canvasUserId: data.canvasUserId, githubUsername: data.githubUsername },
+              'Student identity updated via IPC (self)',
+            );
+          }
+        }
+      } else {
+        // Main can set identity for any group
+        const targetFolder = data.targetFolder || sourceGroup;
+        if (data.canvasUserId || data.githubUsername) {
+          const updated = updateGroupIdentity(targetFolder, {
+            canvasUserId: data.canvasUserId,
+            githubUsername: data.githubUsername,
+          });
+          if (updated) {
+            logger.info(
+              { targetFolder, canvasUserId: data.canvasUserId, githubUsername: data.githubUsername },
+              'Student identity updated via IPC (admin)',
+            );
+          } else {
+            logger.warn(
+              { targetFolder },
+              'set_student_identity: no matching group found',
+            );
+          }
+        }
       }
       break;
 

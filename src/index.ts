@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import {
+  ADMIN_PHONE_NUMBERS,
   ASSISTANT_NAME,
   DATA_DIR,
   DEBOUNCE_MS,
@@ -38,6 +39,8 @@ import { GroupQueue } from './group-queue.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound, stripInternalTags } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
+import { hasBootstrapRun, seedCompetencyBootstrap } from './competency-bootstrap.js';
+import { seedCourseSync } from './course-sync.js';
 import { seedTeachingPatrol } from './teaching-patrol.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -80,6 +83,13 @@ function stopTypingIndicator(channel: Channel, chatJid: string): void {
   channel.setTyping?.(chatJid, false);
 }
 
+/** Check if a WhatsApp sender is on the admin allowlist. */
+function isAdminSender(sender: string): boolean {
+  if (ADMIN_PHONE_NUMBERS.length === 0) return true;
+  const phone = sender.replace(/@.*$/, '');
+  return ADMIN_PHONE_NUMBERS.includes(phone);
+}
+
 let whatsapp: WhatsAppChannel;
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -116,6 +126,14 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   // Create group folder
   const groupDir = path.join(DATA_DIR, '..', 'groups', group.folder);
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
+
+  // Bootstrap COMPETENCY.md from Canvas grades for student groups
+  if (group.folder !== MAIN_GROUP_FOLDER) {
+    const allTasks = getAllTasks();
+    if (!hasBootstrapRun(group.folder, allTasks)) {
+      seedCompetencyBootstrap(group.folder, jid);
+    }
+  }
 
   logger.info(
     { jid, name: group.name, folder: group.folder },
@@ -163,9 +181,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
 
   const sinceTimestamp = lastAgentTimestamp[chatJid] || '';
-  const missedMessages = getMessagesSince(chatJid, sinceTimestamp, ASSISTANT_NAME);
+  let missedMessages = getMessagesSince(chatJid, sinceTimestamp, ASSISTANT_NAME);
 
   if (missedMessages.length === 0) return true;
+
+  // Admin channel: only process messages from allowlisted phone numbers
+  if (isMainGroup && ADMIN_PHONE_NUMBERS.length > 0) {
+    missedMessages = missedMessages.filter(m => isAdminSender(m.sender));
+    if (missedMessages.length === 0) return true;
+  }
 
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
@@ -205,6 +229,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
   let emptyOutputRetried = false;
+  const sendMessageFlagPath = path.join(DATA_DIR, 'ipc', group.folder, 'messages', '.send_message_used');
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
@@ -213,9 +238,27 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
       const text = stripInternalTags(raw);
       logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
+      // Check if agent JUST sent via IPC tool (fresh per result — flag is created
+      // each time an IPC tool fires, so only suppress the immediately following output).
+      let ipcToolUsed = false;
+      try {
+        if (fs.existsSync(sendMessageFlagPath)) {
+          ipcToolUsed = true;
+          fs.unlinkSync(sendMessageFlagPath);
+        }
+      } catch { /* ignore */ }
+
       if (text) {
-        await channel.sendMessage(chatJid, text);
-        // Response sent — stop typing until a new message is piped
+        if (ipcToolUsed) {
+          logger.info({ group: group.name }, 'Suppressing text output (agent used send_message)');
+        } else {
+          await channel.sendMessage(chatJid, text);
+        }
+        stopTypingIndicator(channel, chatJid);
+        emptyOutputRetried = false;
+      } else if (ipcToolUsed) {
+        // Agent sent via IPC tool and output was all <internal> — no retry needed.
+        logger.info({ group: group.name }, 'Agent output was internal-only but sent via IPC tool, skipping retry');
         stopTypingIndicator(channel, chatJid);
         emptyOutputRetried = false;
       } else if (!emptyOutputRetried) {
@@ -332,6 +375,8 @@ async function runAgent(
         groupFolder: group.folder,
         chatJid,
         isMain,
+        canvasUserId: group.canvasUserId,
+        githubUsername: group.githubUsername,
       },
       (proc, containerName) => queue.registerProcess(chatJid, proc, containerName, group.folder),
       wrappedOnOutput,
@@ -400,6 +445,13 @@ async function startMessageLoop(): Promise<void> {
           }
 
           const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
+
+          // Admin channel: skip if no messages are from allowlisted senders
+          if (isMainGroup && ADMIN_PHONE_NUMBERS.length > 0) {
+            const hasAdminMessage = groupMessages.some(m => isAdminSender(m.sender));
+            if (!hasAdminMessage) continue;
+          }
+
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
 
           // For non-main groups, only act on trigger messages.
@@ -580,6 +632,9 @@ async function main(): Promise<void> {
       if (!text) return Promise.resolve();
       return channel.sendMessage(jid, text);
     },
+    sendReaction: (jid, messageId, emoji) => whatsapp.sendReaction(jid, messageId, emoji),
+    sendAudioMessage: (jid, buffer) => whatsapp.sendAudioMessage(jid, buffer),
+    sendImageMessage: (jid, buffer, caption) => whatsapp.sendImageMessage(jid, buffer, caption),
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroupMetadata: (force) => whatsapp?.syncGroupMetadata(force) ?? Promise.resolve(),
@@ -588,6 +643,15 @@ async function main(): Promise<void> {
   });
   queue.setProcessMessagesFn(processGroupMessages);
   seedTeachingPatrol(registeredGroups);
+  seedCourseSync(registeredGroups);
+
+  // Bootstrap COMPETENCY.md for any existing student groups that haven't been bootstrapped
+  const allTasks = getAllTasks();
+  for (const [jid, group] of Object.entries(registeredGroups)) {
+    if (group.folder !== MAIN_GROUP_FOLDER && !hasBootstrapRun(group.folder, allTasks)) {
+      seedCompetencyBootstrap(group.folder, jid);
+    }
+  }
   recoverPendingMessages();
   startMessageLoop();
 }

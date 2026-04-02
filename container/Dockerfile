@@ -23,6 +23,9 @@ RUN apt-get update && apt-get install -y \
     libxshmfence1 \
     curl \
     git \
+    ffmpeg \
+    unzip \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Chromium path for agent-browser
@@ -36,10 +39,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/leanrag \
     && /opt/leanrag/bin/pip install --no-cache-dir \
-        boto3 networkx numpy python-dotenv "mcp[cli]"
+        boto3 networkx numpy python-dotenv "mcp[cli]" requests python-docx
 
-# Install agent-browser and claude-code globally
-RUN npm install -g agent-browser @anthropic-ai/claude-code
+# Install agent-browser, claude-code, and mermaid-cli globally
+RUN npm install -g agent-browser @anthropic-ai/claude-code @mermaid-js/mermaid-cli
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Create app directory
 WORKDIR /app
@@ -49,6 +53,9 @@ COPY agent-runner/package*.json ./
 
 # Install dependencies
 RUN npm install
+
+# Copy helper scripts (TTS, etc.)
+COPY scripts/ /opt/scripts/
 
 # Copy source code
 COPY agent-runner/ ./

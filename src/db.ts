@@ -75,12 +75,66 @@ function createSchema(database: Database.Database): void {
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+
+    CREATE TABLE IF NOT EXISTS memories (
+      id TEXT PRIMARY KEY,
+      student_folder TEXT NOT NULL,
+      text TEXT NOT NULL,
+      category TEXT DEFAULT 'other',
+      entity TEXT,
+      key TEXT,
+      value TEXT,
+      source TEXT DEFAULT 'agent',
+      created_at INTEGER NOT NULL,
+      decay_class TEXT DEFAULT 'stable',
+      expires_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_memories_folder ON memories(student_folder);
+    CREATE INDEX IF NOT EXISTS idx_memories_expires ON memories(expires_at) WHERE expires_at IS NOT NULL;
   `);
+
+  // FTS5 full-text search index for memories (may fail gracefully on non-FTS5 builds)
+  try {
+    database.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+        text, category, entity, key, value,
+        content='memories',
+        content_rowid='rowid',
+        tokenize='porter unicode61'
+      );
+      CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+        INSERT INTO memories_fts(rowid, text, category, entity, key, value)
+        VALUES (new.rowid, new.text, new.category, new.entity, new.key, new.value);
+      END;
+      CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, text, category, entity, key, value)
+        VALUES ('delete', old.rowid, old.text, old.category, old.entity, old.key, old.value);
+      END;
+    `);
+  } catch {
+    /* FTS5 not available — memories will work without full-text search */
+  }
 
   // Add context_mode column if it doesn't exist (migration for existing DBs)
   try {
     database.exec(
       `ALTER TABLE scheduled_tasks ADD COLUMN context_mode TEXT DEFAULT 'isolated'`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
+  // Add identity binding columns (Canvas/GitHub access control)
+  try {
+    database.exec(
+      `ALTER TABLE registered_groups ADD COLUMN canvas_user_id TEXT`,
+    );
+  } catch {
+    /* column already exists */
+  }
+  try {
+    database.exec(
+      `ALTER TABLE registered_groups ADD COLUMN github_username TEXT`,
     );
   } catch {
     /* column already exists */
@@ -124,6 +178,11 @@ export function initDatabase(): void {
   db = new Database(dbPath);
   createSchema(db);
 
+  // Prune expired memories on startup
+  try {
+    db.prepare(`DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at < ?`).run(Date.now());
+  } catch { /* table may not exist yet on first run */ }
+
   // Migrate from JSON files if they exist
   migrateJsonState();
 }
@@ -132,6 +191,12 @@ export function initDatabase(): void {
 export function _initTestDatabase(): void {
   db = new Database(':memory:');
   createSchema(db);
+}
+
+/** Get the initialized database instance. */
+export function getDb(): Database.Database {
+  if (!db) throw new Error('Database not initialized. Call initDatabase() first.');
+  return db;
 }
 
 /**
@@ -517,6 +582,8 @@ export function getRegisteredGroup(
         added_at: string;
         container_config: string | null;
         requires_trigger: number | null;
+        canvas_user_id: string | null;
+        github_username: string | null;
       }
     | undefined;
   if (!row) return undefined;
@@ -530,6 +597,8 @@ export function getRegisteredGroup(
       ? JSON.parse(row.container_config)
       : undefined,
     requiresTrigger: row.requires_trigger === null ? undefined : row.requires_trigger === 1,
+    canvasUserId: row.canvas_user_id || undefined,
+    githubUsername: row.github_username || undefined,
   };
 }
 
@@ -538,8 +607,8 @@ export function setRegisteredGroup(
   group: RegisteredGroup,
 ): void {
   db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, canvas_user_id, github_username)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     jid,
     group.name,
@@ -548,7 +617,38 @@ export function setRegisteredGroup(
     group.added_at,
     group.containerConfig ? JSON.stringify(group.containerConfig) : null,
     group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
+    group.canvasUserId || null,
+    group.githubUsername || null,
   );
+}
+
+/**
+ * Update identity binding for a student group.
+ * Called via IPC when bootstrap or admin discovers Canvas/GitHub identity.
+ */
+export function updateGroupIdentity(
+  folder: string,
+  identity: { canvasUserId?: string; githubUsername?: string },
+): boolean {
+  const fields: string[] = [];
+  const values: unknown[] = [];
+
+  if (identity.canvasUserId) {
+    fields.push('canvas_user_id = ?');
+    values.push(identity.canvasUserId);
+  }
+  if (identity.githubUsername) {
+    fields.push('github_username = ?');
+    values.push(identity.githubUsername);
+  }
+
+  if (fields.length === 0) return false;
+
+  values.push(folder);
+  const result = db.prepare(
+    `UPDATE registered_groups SET ${fields.join(', ')} WHERE folder = ?`,
+  ).run(...values);
+  return result.changes > 0;
 }
 
 export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
@@ -562,6 +662,8 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     added_at: string;
     container_config: string | null;
     requires_trigger: number | null;
+    canvas_user_id: string | null;
+    github_username: string | null;
   }>;
   const result: Record<string, RegisteredGroup> = {};
   for (const row of rows) {
@@ -574,6 +676,8 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
         ? JSON.parse(row.container_config)
         : undefined,
       requiresTrigger: row.requires_trigger === null ? undefined : row.requires_trigger === 1,
+      canvasUserId: row.canvas_user_id || undefined,
+      githubUsername: row.github_username || undefined,
     };
   }
   return result;

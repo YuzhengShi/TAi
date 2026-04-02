@@ -39,6 +39,10 @@ export interface RegisteredGroup {
   added_at: string;
   containerConfig?: ContainerConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
+  // Identity binding for Canvas/GitHub access control.
+  // Stored in DB (tamper-proof from containers), passed as env vars.
+  canvasUserId?: string;
+  githubUsername?: string;
 }
 
 export interface NewMessage {

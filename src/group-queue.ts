@@ -14,6 +14,7 @@ const BASE_RETRY_MS = 5000;
 
 interface GroupState {
   active: boolean;
+  runningTask: boolean; // true when container is running a scheduled task (not a message handler)
   pendingMessages: boolean;
   pendingTasks: QueuedTask[];
   process: ChildProcess | null;
@@ -35,6 +36,7 @@ export class GroupQueue {
     if (!state) {
       state = {
         active: false,
+        runningTask: false,
         pendingMessages: false,
         pendingTasks: [],
         process: null,
@@ -123,6 +125,10 @@ export class GroupQueue {
    */
   sendMessage(groupJid: string, text: string): boolean {
     const state = this.getGroup(groupJid);
+    // Don't pipe user messages into scheduled task containers — the task has its own
+    // prompt/context and won't handle conversational messages correctly. Return false
+    // so the message loop queues it via debounce → enqueueMessageCheck instead.
+    if (state.runningTask) return false;
     const stdin = state.process?.stdin;
     if (!state.active || !stdin?.writable || stdin.writableEnded || stdin.destroyed) return false;
 
@@ -190,6 +196,7 @@ export class GroupQueue {
   private async runTask(groupJid: string, task: QueuedTask): Promise<void> {
     const state = this.getGroup(groupJid);
     state.active = true;
+    state.runningTask = true;
     this.activeCount++;
 
     logger.debug(
@@ -203,6 +210,7 @@ export class GroupQueue {
       logger.error({ groupJid, taskId: task.id, err }, 'Error running task');
     } finally {
       state.active = false;
+      state.runningTask = false;
       state.process = null;
       state.containerName = null;
       state.groupFolder = null;
