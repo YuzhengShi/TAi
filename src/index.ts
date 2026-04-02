@@ -41,6 +41,7 @@ import { findChannel, formatMessages, formatOutbound, stripInternalTags } from '
 import { startSchedulerLoop } from './task-scheduler.js';
 import { hasBootstrapRun, seedCompetencyBootstrap } from './competency-bootstrap.js';
 import { seedCourseSync } from './course-sync.js';
+import { startLeanRAGSync } from './leanrag-sync.js';
 import { seedTeachingPatrol } from './teaching-patrol.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -644,6 +645,7 @@ async function main(): Promise<void> {
   queue.setProcessMessagesFn(processGroupMessages);
   seedTeachingPatrol(registeredGroups);
   seedCourseSync(registeredGroups);
+  startLeanRAGSync();
 
   // Bootstrap COMPETENCY.md for any existing student groups that haven't been bootstrapped
   const allTasks = getAllTasks();

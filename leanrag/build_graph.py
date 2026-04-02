@@ -241,7 +241,7 @@ def main() -> None:
 
     # ── Stage 3: Entity extraction ─────────────────────────────────
     log.info("Extracting entities and relations from %d chunks", len(chunks))
-    g0_entities, g0_relations = extract_from_chunks(chunks, chash, force=args.force)
+    g0_entities, g0_relations = extract_from_chunks(chunks, force=args.force)
     log.info("Extracted %d entities, %d relations", len(g0_entities), len(g0_relations))
 
     if not g0_entities:
@@ -250,7 +250,7 @@ def main() -> None:
 
     # ── Stage 4: Embed G0 entities ─────────────────────────────────
     log.info("Embedding %d G0 entities", len(g0_entities))
-    g0_embeddings = embed_entities(g0_entities, chash, force=args.force)
+    g0_embeddings = embed_entities(g0_entities, force=args.force)
 
     # ── Stage 5: GMM clustering G0 → G1 ───────────────────────────
     log.info("Clustering G0 → G1")

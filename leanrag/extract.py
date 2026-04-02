@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -133,94 +134,140 @@ def _parse_extraction(response: str) -> list[dict]:
 
 # ── Entity extraction from chunks ──────────────────────────────────────
 
-def extract_from_chunks(
-    chunks: list[Chunk],
-    corpus_hash: str,
-    force: bool = False,
-) -> tuple[list[Entity], list[Relation]]:
-    """Extract entities and relations from all chunks via DeepSeek.
 
-    Saves progress every SAVE_EVERY_N_CHUNKS chunks for resumability.
-    Returns deduplicated entities and relations.
-    """
-    cache_path = config.CACHE_DIR / f"entities_{corpus_hash}.json"
+def _chunk_content_hash(text: str) -> str:
+    """Content-based hash for incremental extraction caching."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
-    # Try loading complete cache
-    if not force and cache_path.exists():
-        log.info("Loading cached entities from %s", cache_path)
-        data = json.loads(cache_path.read_text(encoding="utf-8"))
-        if data.get("complete"):
-            entities = [Entity.from_dict(e) for e in data["entities"]]
-            relations = [Relation.from_dict(r) for r in data["relations"]]
-            return entities, relations
-        # Partial cache — resume from where we left off
-        processed = set(data.get("processed_chunks", []))
-        raw_tuples = data.get("raw_tuples", [])
-        log.info("Resuming extraction: %d/%d chunks done", len(processed), len(chunks))
-    else:
-        processed: set[str] = set()
-        raw_tuples: list[dict] = []
 
-    config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    new_since_save = 0
+def _migrate_old_caches(chunks: list[Chunk]) -> dict[str, list[dict]]:
+    """One-time migration from corpus-hash-keyed caches to content-hash store."""
+    # Build chunk_id → content_hash mapping from current chunks
+    id_to_hash: dict[str, str] = {}
+    for chunk in chunks:
+        id_to_hash[chunk.chunk_id] = _chunk_content_hash(chunk.text)
 
-    for i, chunk in enumerate(chunks):
-        if chunk.chunk_id in processed:
+    # Find the most recent complete old-format cache
+    for path in sorted(config.CACHE_DIR.glob("entities_*.json"),
+                       key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not data.get("complete"):
             continue
 
-        log.info("Extracting chunk %d/%d: %s", i + 1, len(chunks), chunk.chunk_id)
+        log.info("Migrating from old cache: %s", path.name)
+
+        # Build entity name → description lookup
+        entity_descs: dict[str, str] = {}
+        for e in data.get("entities", []):
+            entity_descs[e["name"]] = e.get("description", "")
+
+        # Reconstruct per-chunk extraction tuples from relations
+        by_chunk: dict[str, list[dict]] = {}
+        for r in data.get("relations", []):
+            for cid in r.get("source_chunk_ids", []):
+                by_chunk.setdefault(cid, []).append({
+                    "head": r["head"],
+                    "head_desc": entity_descs.get(r["head"], ""),
+                    "relation": r["relation"],
+                    "tail": r["tail"],
+                    "tail_desc": entity_descs.get(r["tail"], ""),
+                })
+
+        store: dict[str, list[dict]] = {}
+        migrated = 0
+        for chunk_id, tuples in by_chunk.items():
+            chash = id_to_hash.get(chunk_id)
+            if chash and chash not in store:
+                store[chash] = tuples
+                migrated += 1
+
+        # Mark processed chunks that produced no relations as empty
+        for chunk_id in data.get("processed_chunks", []):
+            chash = id_to_hash.get(chunk_id)
+            if chash and chash not in store:
+                store[chash] = []
+                migrated += 1
+
+        log.info("Migrated %d chunk extractions from old cache", migrated)
+        return store
+
+    return {}
+
+
+def extract_from_chunks(
+    chunks: list[Chunk],
+    force: bool = False,
+) -> tuple[list[Entity], list[Relation]]:
+    """Extract entities and relations from chunks via DeepSeek.
+
+    Uses per-chunk content hashing for incremental extraction — only new or
+    changed chunks trigger DeepSeek calls.  The extraction store persists
+    across builds so adding a single lecture only processes its chunks.
+    """
+    store_path = config.EXTRACTION_STORE_PATH
+    config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Load persistent extraction store (or migrate from old format)
+    if not force and store_path.exists():
+        store: dict[str, list[dict]] = json.loads(
+            store_path.read_text(encoding="utf-8"),
+        )
+    elif not force:
+        store = _migrate_old_caches(chunks)
+    else:
+        store = {}
+
+    # Identify new chunks by content hash
+    chunk_hashes: list[tuple[Chunk, str]] = []
+    new_chunks: list[tuple[int, Chunk, str]] = []
+    for i, chunk in enumerate(chunks):
+        chash = _chunk_content_hash(chunk.text)
+        chunk_hashes.append((chunk, chash))
+        if chash not in store:
+            new_chunks.append((i, chunk, chash))
+
+    log.info("Incremental extraction: %d total, %d cached, %d new",
+             len(chunks), len(chunks) - len(new_chunks), len(new_chunks))
+
+    # Extract only new chunks
+    for j, (i, chunk, chash) in enumerate(new_chunks):
+        log.info("Extracting new chunk %d/%d (pos %d/%d): %s",
+                 j + 1, len(new_chunks), i + 1, len(chunks), chunk.chunk_id)
         prompt = EXTRACTION_PROMPT.format(text=chunk.text)
 
         try:
             response = deepseek_converse(prompt)
         except Exception as exc:
             log.error("Extraction failed for %s: %s", chunk.chunk_id, exc)
+            store[chash] = []
             continue
 
-        parsed = _parse_extraction(response)
-        for item in parsed:
-            item["source_chunk_id"] = chunk.chunk_id
-            item["source_file"] = chunk.source_file
-            raw_tuples.append(item)
+        store[chash] = _parse_extraction(response)
 
-        processed.add(chunk.chunk_id)
-        new_since_save += 1
+        # Checkpoint periodically
+        if (j + 1) % config.SAVE_EVERY_N_CHUNKS == 0:
+            store_path.write_text(
+                json.dumps(store, ensure_ascii=False), encoding="utf-8",
+            )
+            log.info("Checkpoint: %d/%d new chunks extracted", j + 1, len(new_chunks))
 
-        if new_since_save >= config.SAVE_EVERY_N_CHUNKS:
-            _save_partial(cache_path, raw_tuples, processed)
-            new_since_save = 0
+    # Save updated store
+    store_path.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
 
-    # Save final complete cache
-    entities, relations = _deduplicate(raw_tuples)
-    _save_complete(cache_path, entities, relations, processed)
+    # Assemble raw_tuples from current chunks with source attribution
+    raw_tuples: list[dict] = []
+    for chunk, chash in chunk_hashes:
+        for item in store.get(chash, []):
+            raw_tuples.append({
+                **item,
+                "source_chunk_id": chunk.chunk_id,
+                "source_file": chunk.source_file,
+            })
 
-    return entities, relations
-
-
-def _save_partial(path: Path, raw_tuples: list[dict], processed: set[str]) -> None:
-    data = {
-        "complete": False,
-        "processed_chunks": sorted(processed),
-        "raw_tuples": raw_tuples,
-    }
-    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    log.info("Saved extraction checkpoint (%d chunks, %d tuples)", len(processed), len(raw_tuples))
-
-
-def _save_complete(
-    path: Path,
-    entities: list[Entity],
-    relations: list[Relation],
-    processed: set[str],
-) -> None:
-    data = {
-        "complete": True,
-        "processed_chunks": sorted(processed),
-        "entities": [e.to_dict() for e in entities],
-        "relations": [r.to_dict() for r in relations],
-    }
-    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    log.info("Saved complete extraction (%d entities, %d relations)", len(entities), len(relations))
+    return _deduplicate(raw_tuples)
 
 
 # ── Deduplication ──────────────────────────────────────────────────────
@@ -285,11 +332,13 @@ def _deduplicate(raw_tuples: list[dict]) -> tuple[list[Entity], list[Relation]]:
 
 def embed_entities(
     entities: list[Entity],
-    corpus_hash: str,
     force: bool = False,
 ) -> np.ndarray:
     """Embed all entity descriptions via Cohere. Returns (n_entities, dim) array."""
-    cache_path = config.CACHE_DIR / f"embeddings_{corpus_hash}.npy"
+    entity_key = hashlib.sha256(
+        "\n".join(sorted(e.name for e in entities)).encode(),
+    ).hexdigest()[:16]
+    cache_path = config.CACHE_DIR / f"embeddings_{entity_key}.npy"
 
     if not force and cache_path.exists():
         log.info("Loading cached embeddings from %s", cache_path)

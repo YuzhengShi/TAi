@@ -16,6 +16,7 @@ MATERIALS_DIR = _PROJECT_ROOT / "cs6650-materials"
 CACHE_DIR = Path(__file__).resolve().parent / "cache"
 GRAPH_PATH = Path(__file__).resolve().parent / "graph.pkl"
 CHUNK_INDEX_PATH = Path(__file__).resolve().parent / "chunk_index.json"
+EXTRACTION_STORE_PATH = CACHE_DIR / "extraction_store.json"
 
 # ── AWS / Bedrock ──────────────────────────────────────────────────────
 AWS_REGION = os.getenv("AWS_REGION", "us-west-2")
