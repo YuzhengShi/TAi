@@ -29,11 +29,13 @@ function getClient(): BedrockRuntimeClient {
   ]);
   cachedClient = new BedrockRuntimeClient({
     region: 'us-east-1', // Nova Sonic is only available in us-east-1
-    credentials: {
-      accessKeyId: secrets.AWS_ACCESS_KEY_ID || '',
-      secretAccessKey: secrets.AWS_SECRET_ACCESS_KEY || '',
-      sessionToken: secrets.AWS_SESSION_TOKEN,
-    },
+    ...(secrets.AWS_ACCESS_KEY_ID && secrets.AWS_SECRET_ACCESS_KEY ? {
+      credentials: {
+        accessKeyId: secrets.AWS_ACCESS_KEY_ID,
+        secretAccessKey: secrets.AWS_SECRET_ACCESS_KEY,
+        ...(secrets.AWS_SESSION_TOKEN ? { sessionToken: secrets.AWS_SESSION_TOKEN } : {}),
+      },
+    } : {}),
     requestHandler: new WebSocketFetchHandler({ connectionTimeout: 5000 }),
   });
   return cachedClient;
