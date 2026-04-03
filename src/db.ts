@@ -498,15 +498,21 @@ export function updateTaskAfterRun(
   id: string,
   nextRun: string | null,
   lastResult: string,
+  hadError: boolean = false,
 ): void {
   const now = new Date().toISOString();
-  db.prepare(
-    `
-    UPDATE scheduled_tasks
-    SET next_run = ?, last_run = ?, last_result = ?, status = CASE WHEN ? IS NULL THEN 'completed' ELSE status END
-    WHERE id = ?
-  `,
-  ).run(nextRun, now, lastResult, nextRun, id);
+  // For once tasks (nextRun=null): 'completed' on success, 'failed' on error.
+  // For recurring tasks (nextRun set): keep 'active' regardless.
+  if (nextRun) {
+    db.prepare(
+      `UPDATE scheduled_tasks SET next_run = ?, last_run = ?, last_result = ? WHERE id = ?`,
+    ).run(nextRun, now, lastResult, id);
+  } else {
+    const finalStatus = hadError ? 'failed' : 'completed';
+    db.prepare(
+      `UPDATE scheduled_tasks SET next_run = NULL, last_run = ?, last_result = ?, status = ? WHERE id = ?`,
+    ).run(now, lastResult, finalStatus, id);
+  }
 }
 
 export function logTaskRun(log: TaskRunLog): void {

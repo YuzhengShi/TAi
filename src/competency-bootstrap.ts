@@ -125,6 +125,7 @@ export function hasBootstrapRun(groupFolder: string, allTasks: Array<{ group_fol
   return allTasks.some(
     (t) =>
       t.group_folder === groupFolder &&
-      t.prompt.includes(BOOTSTRAP_TAG),
+      t.prompt.includes(BOOTSTRAP_TAG) &&
+      t.status === 'completed',
   );
 }
