@@ -22,7 +22,13 @@ cloudflared tunnel --url http://localhost:3001 2>&1 | while IFS= read -r line; d
         echo "VOICE_BASE_URL=$URL" >> "$ENV_FILE"
       fi
 
-      echo "[tunnel] Updated .env — agents will use new URL on next invocation"
+      echo "[tunnel] Updated .env"
+
+      # Restart main so in-flight containers don't use stale URL
+      if systemctl is-active --quiet nanoclaw-main 2>/dev/null; then
+        sudo systemctl restart nanoclaw-main
+        echo "[tunnel] Restarted nanoclaw-main with URL: $URL"
+      fi
     fi
   fi
 done
