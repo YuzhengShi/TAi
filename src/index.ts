@@ -437,7 +437,10 @@ async function startMessageLoop(): Promise<void> {
 
         for (const [chatJid, groupMessages] of messagesByGroup) {
           const group = registeredGroups[chatJid];
-          if (!group) continue;
+          if (!group) {
+            logger.warn({ chatJid, messageCount: groupMessages.length }, 'Message from unregistered JID — check groups config or JID mismatch');
+            continue;
+          }
 
           const channel = findChannel(channels, chatJid);
           if (!channel) {

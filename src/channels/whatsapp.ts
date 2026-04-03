@@ -270,28 +270,41 @@ export class WhatsAppChannel implements Channel {
                 label = 'a sticker';
               } else if (inner?.documentMessage) {
                 const mime = inner.documentMessage.mimetype || 'application/octet-stream';
+                const origName = inner.documentMessage.fileName;
                 if (mime === 'application/pdf') {
-                  label = 'a PDF document';
+                  label = origName ? `a PDF document "${origName}"` : 'a PDF document';
                   hint = ' For large PDFs, use the pages parameter (e.g., pages: "1-5").';
                 } else if (mime.includes('zip') || mime.includes('tar') || mime.includes('gzip')) {
-                  label = `an archive (${mime})`;
+                  label = origName ? `an archive "${origName}"` : `an archive (${mime})`;
                   hint = ' Use Bash to extract it (unzip for .zip, tar for .tar/.tar.gz).';
                 } else {
-                  label = `a document (${mime})`;
+                  label = origName ? `a document "${origName}"` : `a document (${mime})`;
                 }
               }
               const mediaRef = `[User sent ${label}. Use your Read tool to view: ${mediaPath}${hint}]`;
               content = content ? `${content}\n${mediaRef}` : mediaRef;
             }
           } else {
-            // Check for unsupported media types (audio, video)
             const inner = extractMessageContent(msg.message);
             if (inner) {
-              for (const [type, humanLabel] of Object.entries(UNSUPPORTED_MEDIA_LABELS)) {
-                if (inner[type as keyof typeof inner]) {
-                  const unsupportedRef = `[${humanLabel}]`;
-                  content = content ? `${content}\n${unsupportedRef}` : unsupportedRef;
-                  break;
+              // Supported type present but download failed — tell the agent so it
+              // can inform the student rather than silently ignoring the file.
+              const failedType = !isBotSent ? SUPPORTED_MEDIA_TYPES.find((t) => inner[t]) : undefined;
+              if (failedType) {
+                const failedMsg = inner[failedType] as Record<string, any>;
+                const originalName = failedMsg?.fileName as string | undefined;
+                const mime = failedMsg?.mimetype as string | undefined;
+                const fileLabel = originalName || (mime ? `file (${mime})` : 'file');
+                const failRef = `[User sent "${fileLabel}" — file could not be downloaded. TAi cannot access this file.]`;
+                content = content ? `${content}\n${failRef}` : failRef;
+              } else {
+                // Check for explicitly unsupported media types (video, etc.)
+                for (const [type, humanLabel] of Object.entries(UNSUPPORTED_MEDIA_LABELS)) {
+                  if (inner[type as keyof typeof inner]) {
+                    const unsupportedRef = `[${humanLabel}]`;
+                    content = content ? `${content}\n${unsupportedRef}` : unsupportedRef;
+                    break;
+                  }
                 }
               }
             }
@@ -531,7 +544,11 @@ export class WhatsAppChannel implements Channel {
 
       const buffer = await downloadMediaMessage(msg, 'buffer', {});
       const ext = this.mimeToExtension(mediaMsg.mimetype, mediaType);
-      const filename = `${msg.key.id}.${ext}`;
+      // Preserve original filename (documents carry fileName); fall back to msgId
+      const originalName = (mediaMsg.fileName as string | undefined)
+        ?.replace(/[/\\:*?"<>|\0]/g, '_')
+        .replace(/^\.+/, '_');
+      const filename = originalName ? `${msg.key.id}-${originalName}` : `${msg.key.id}.${ext}`;
 
       const mediaDir = path.join(DATA_DIR, 'ipc', groupFolder, 'media');
       fs.mkdirSync(mediaDir, { recursive: true });
@@ -558,6 +575,8 @@ export class WhatsAppChannel implements Channel {
       'application/msword': 'doc',
       'application/vnd.ms-excel': 'xls',
       'text/plain': 'txt',
+      'text/markdown': 'md',
+      'text/x-markdown': 'md',
       'audio/ogg; codecs=opus': 'ogg',
       'audio/ogg': 'ogg',
       'audio/mpeg': 'mp3',
