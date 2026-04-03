@@ -81,6 +81,24 @@ function buildVolumeMounts(
       readonly: false,
     });
 
+    // EC2 uses symlinks (groups/→/data/groups/, data/→/data/data/).
+    // Docker preserves symlinks inside bind mounts but their targets don't
+    // exist in the container. Overlay-mount the resolved real paths.
+    for (const [name, hostDir] of [['groups', GROUPS_DIR], ['data', DATA_DIR]] as const) {
+      try {
+        const resolved = fs.realpathSync(hostDir);
+        if (resolved !== path.resolve(projectRoot, name)) {
+          mounts.push({
+            hostPath: resolved,
+            containerPath: `/workspace/project/${name}`,
+            readonly: false,
+          });
+        }
+      } catch {
+        // Directory doesn't exist yet — skip
+      }
+    }
+
     // Main also gets its group folder as the working directory
     mounts.push({
       hostPath: path.join(GROUPS_DIR, group.folder),
