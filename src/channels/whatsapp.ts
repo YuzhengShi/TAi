@@ -323,6 +323,9 @@ export class WhatsAppChannel implements Channel {
             ? fromMe
             : content.startsWith(`${ASSISTANT_NAME}:`) || this.sentByBot.has(msg.key.id || '');
 
+          // Skip empty messages (e.g. unsupported types like contacts/locations)
+          if (!content.trim() && !isBotMessage) continue;
+
           this.opts.onMessage(chatJid, {
             id: msg.key.id || '',
             chat_jid: chatJid,
@@ -543,7 +546,7 @@ export class WhatsAppChannel implements Channel {
       }
 
       const buffer = await downloadMediaMessage(msg, 'buffer', {});
-      const ext = this.mimeToExtension(mediaMsg.mimetype, mediaType);
+      const ext = this.mimeToExtension(mediaMsg.mimetype, mediaType, mediaMsg.fileName);
       // Preserve original filename (documents carry fileName); fall back to msgId
       const originalName = (mediaMsg.fileName as string | undefined)
         ?.replace(/[/\\:*?"<>|\0]/g, '_')
@@ -562,7 +565,7 @@ export class WhatsAppChannel implements Channel {
     }
   }
 
-  private mimeToExtension(mime: string | undefined | null, mediaType: string): string {
+  private mimeToExtension(mime: string | undefined | null, mediaType: string, fileName?: string): string {
     const map: Record<string, string> = {
       'image/jpeg': 'jpg',
       'image/png': 'png',
@@ -577,6 +580,23 @@ export class WhatsAppChannel implements Channel {
       'text/plain': 'txt',
       'text/markdown': 'md',
       'text/x-markdown': 'md',
+      'text/x-python': 'py',
+      'application/x-python': 'py',
+      'application/x-python-code': 'py',
+      'text/x-go': 'go',
+      'text/x-java-source': 'java',
+      'text/x-csrc': 'c',
+      'text/x-c++src': 'cpp',
+      'application/javascript': 'js',
+      'text/javascript': 'js',
+      'application/typescript': 'ts',
+      'application/json': 'json',
+      'text/csv': 'csv',
+      'text/html': 'html',
+      'text/xml': 'xml',
+      'application/xml': 'xml',
+      'text/yaml': 'yaml',
+      'application/x-yaml': 'yaml',
       'audio/ogg; codecs=opus': 'ogg',
       'audio/ogg': 'ogg',
       'audio/mpeg': 'mp3',
@@ -586,11 +606,15 @@ export class WhatsAppChannel implements Channel {
       'application/x-gzip': 'tar.gz',
     };
     if (mime && map[mime]) return map[mime];
+    // Try extracting extension from original filename
+    if (fileName) {
+      const dotIdx = fileName.lastIndexOf('.');
+      if (dotIdx > 0) return fileName.slice(dotIdx + 1).toLowerCase();
+    }
     // Fallback by media type
     if (mediaType === 'imageMessage') return 'jpg';
     if (mediaType === 'stickerMessage') return 'webp';
     if (mediaType === 'audioMessage') return 'ogg';
-    if (mediaType === 'documentMessage') return 'bin';
     return 'bin';
   }
 
