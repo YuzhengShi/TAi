@@ -11,6 +11,8 @@ WorkingDirectory=/home/nanoclaw/TAi
 ExecStart=/usr/bin/npx tsx voice/server.ts
 Restart=on-failure
 RestartSec=10
+KillMode=control-group
+TimeoutStopSec=10
 
 # Logging
 StandardOutput=append:/var/log/nanoclaw/voice.log
