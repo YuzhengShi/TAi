@@ -1002,12 +1002,26 @@ The interview asks targeted questions about THEIR specific work — "I see you u
     }
 
     if ((process.env.GITHUB_TOKEN || process.env.GITHUB_TOKEN_PUBLIC) && ghOwner) {
-      const ghEnv = githubEnvFor(submissionGithubHost || '');
-let targetRepo = submissionRepoName;  // direct from submission URL if available
+      let ghEnv = githubEnvFor(submissionGithubHost || '');
+      let targetRepo = submissionRepoName;  // direct from submission URL if available
 
       // If no specific repo from submission URL, list repos and match by assignment name
       if (!targetRepo) {
-        const repos = callPy('github_api.py', { action: 'list_repos', params: { user: ghOwner } }, ghEnv) as Array<Record<string, unknown>>;
+        let repos = callPy('github_api.py', { action: 'list_repos', params: { user: ghOwner } }, ghEnv) as Array<Record<string, unknown>>;
+
+        // Fallback: if no repos on primary host, try the other one
+        if ((!Array.isArray(repos) || repos.length === 0) && !submissionGithubHost) {
+          const fallbackEnv = githubEnvFor('github.com');
+          if (fallbackEnv.GITHUB_TOKEN) {
+            console.error(`[start_mock_interview] No repos on primary host, trying github.com fallback`);
+            const fallbackRepos = callPy('github_api.py', { action: 'list_repos', params: { user: ghOwner } }, fallbackEnv) as Array<Record<string, unknown>>;
+            if (Array.isArray(fallbackRepos) && fallbackRepos.length > 0) {
+              repos = fallbackRepos;
+              ghEnv = fallbackEnv;
+            }
+          }
+        }
+
         if (Array.isArray(repos) && repos.length > 0) {
           // Build smart keyword list: words + HW number patterns
           const hwNum = assignmentName.match(/(?:hw|homework|assignment)[^\d]*(\d+)/i)?.[1]
