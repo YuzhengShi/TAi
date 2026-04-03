@@ -11,6 +11,7 @@ import {
   TIMEZONE,
 } from './config.js';
 import { AvailableGroup } from './container-runner.js';
+import { seedCompetencyBootstrap } from './competency-bootstrap.js';
 import { createTask, deleteTask, getTaskById, updateGroupIdentity, updateTask } from './db.js';
 import { buildMemoryExport, MemoryFact, storeMemory } from './memory.js';
 import { logger } from './logger.js';
@@ -321,7 +322,12 @@ export async function processTaskIpc(
             );
             break;
           }
-          nextRun = scheduled.toISOString();
+          // If timestamp is in the past (e.g. agent sent local time without
+          // timezone and host parsed as UTC), run in 5 seconds instead of
+          // skipping or firing stale.
+          nextRun = scheduled.getTime() <= Date.now()
+            ? new Date(Date.now() + 5000).toISOString()
+            : scheduled.toISOString();
         }
 
         const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -463,6 +469,32 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'run_bootstrap': {
+      if (!isMain) {
+        logger.warn({ sourceGroup }, 'Unauthorized run_bootstrap attempt blocked');
+        break;
+      }
+      const bootstrapJid = data.targetJid as string;
+      if (!bootstrapJid) {
+        logger.warn({ sourceGroup }, 'run_bootstrap: missing targetJid');
+        break;
+      }
+      const bootstrapGroup = registeredGroups[bootstrapJid];
+      if (!bootstrapGroup) {
+        logger.warn({ targetJid: bootstrapJid }, 'run_bootstrap: target group not registered');
+        break;
+      }
+      seedCompetencyBootstrap(bootstrapGroup.folder, bootstrapJid);
+      auditLog('run_bootstrap', {
+        sourceGroup, targetFolder: bootstrapGroup.folder, targetJid: bootstrapJid,
+      });
+      logger.info(
+        { targetFolder: bootstrapGroup.folder, targetJid: bootstrapJid },
+        'Bootstrap triggered via IPC',
+      );
+      break;
+    }
 
     case 'set_student_identity':
       // Only main or scheduled tasks can set identity (verified by IPC directory)
