@@ -15,7 +15,7 @@ const SCRIPTS_DIR = path.join(process.cwd(), 'container', 'scripts');
 function getSecrets(): Record<string, string> {
   return readEnvFile([
     'CANVAS_API_TOKEN', 'CANVAS_BASE_URL', 'CANVAS_COURSE_ID',
-    'GITHUB_TOKEN', 'GITHUB_BASE_URL',
+    'GITHUB_TOKEN', 'GITHUB_TOKEN_PUBLIC', 'GITHUB_BASE_URL',
     'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION',
   ]);
 }
@@ -248,48 +248,58 @@ export async function loadInterviewContext(
     }
   }
 
-  // 5. Get student code from GitHub
+  // 5. Get student code from GitHub (try Khoury GHE first, fall back to github.com)
   let codeExcerpts = '';
-  if (secrets.GITHUB_TOKEN && comp.githubUsername) {
-    // Try to find a relevant repo (match assignment name or look for recent)
-    const repos = callScript('github_api.py', {
-      action: 'list_repos',
-      params: { user: comp.githubUsername },
-    }, secrets) as Array<Record<string, string>>;
+  if (comp.githubUsername) {
+    const hosts: Array<{ host?: string; needsToken: string }> = [
+      { needsToken: 'GITHUB_TOKEN' },                     // Khoury GHE (default)
+      { host: 'github.com', needsToken: 'GITHUB_TOKEN_PUBLIC' },  // public fallback
+    ];
 
-    if (Array.isArray(repos) && repos.length > 0) {
+    for (const { host, needsToken } of hosts) {
+      if (!secrets[needsToken]) continue;
+      const hostParams = host ? { host } : {};
+
+      const repos = callScript('github_api.py', {
+        action: 'list_repos',
+        params: { user: comp.githubUsername, ...hostParams },
+      }, secrets) as Array<Record<string, string>> | Record<string, string>;
+
+      if (!Array.isArray(repos) || repos.length === 0) continue;
+
       // Pick the most recently updated repo
       const sorted = repos.sort((a, b) =>
         new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime(),
       );
       const repo = sorted[0];
-      if (repo?.name) {
-        // Get repo tree
-        const tree = callScript('github_api.py', {
-          action: 'repo_tree',
-          params: { owner: comp.githubUsername, repo: repo.name },
-        }, secrets) as Array<Record<string, string>>;
+      if (!repo?.name) continue;
 
-        if (Array.isArray(tree)) {
-          // Read key files (main.go, Dockerfile, or most relevant)
-          const keyFiles = tree
-            .filter(f => f.type === 'file')
-            .filter(f => /\.(go|py|java|js|ts|tf|yaml|yml|dockerfile)$/i.test(f.name) || f.name === 'Dockerfile')
-            .slice(0, 3);
+      // Get repo tree
+      const tree = callScript('github_api.py', {
+        action: 'repo_tree',
+        params: { owner: comp.githubUsername, repo: repo.name, ...hostParams },
+      }, secrets) as Array<Record<string, string>>;
 
-          const excerpts: string[] = [];
-          for (const f of keyFiles) {
-            const content = callScript('github_api.py', {
-              action: 'file_content',
-              params: { owner: comp.githubUsername, repo: repo.name, path: f.name },
-            }, secrets) as Record<string, string>;
-            if (content?.content) {
-              excerpts.push(`--- ${f.name} ---\n${truncate(content.content, 600)}`);
-            }
-          }
-          codeExcerpts = excerpts.join('\n\n');
+      if (!Array.isArray(tree)) continue;
+
+      // Read key files (main.go, Dockerfile, or most relevant)
+      const keyFiles = tree
+        .filter(f => f.type === 'file')
+        .filter(f => /\.(go|py|java|js|ts|tf|yaml|yml|dockerfile)$/i.test(f.name) || f.name === 'Dockerfile')
+        .slice(0, 3);
+
+      const excerpts: string[] = [];
+      for (const f of keyFiles) {
+        const content = callScript('github_api.py', {
+          action: 'file_content',
+          params: { owner: comp.githubUsername, repo: repo.name, path: f.name, ...hostParams },
+        }, secrets) as Record<string, string>;
+        if (content?.content) {
+          excerpts.push(`--- ${f.name} ---\n${truncate(content.content, 600)}`);
         }
       }
+      codeExcerpts = excerpts.join('\n\n');
+      break; // Found repos on this host, stop trying
     }
   }
 
