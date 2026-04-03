@@ -23,12 +23,67 @@ import { logger } from '../logger.js';
 import { Channel, OnInboundMessage, OnChatMetadata, RegisteredGroup } from '../types.js';
 
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const WA_MAX_MESSAGE_LENGTH = 4000; // WhatsApp silently truncates around 4096; use 4000 for safety
 const MAX_MEDIA_SIZE = 10 * 1024 * 1024; // 10 MB
 
 const SUPPORTED_MEDIA_TYPES = ['imageMessage', 'documentMessage', 'stickerMessage', 'audioMessage'] as const;
 const UNSUPPORTED_MEDIA_LABELS: Record<string, string> = {
   videoMessage: 'Video — not yet supported',
 };
+
+/**
+ * Split a message into chunks that fit within WhatsApp's length limit.
+ * Prefers splitting at paragraph breaks, then sentence boundaries.
+ */
+function splitMessage(text: string, maxLen: number): string[] {
+  if (text.length <= maxLen) return [text];
+
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > maxLen) {
+    let splitAt = -1;
+
+    // Try paragraph break (\n\n) within limit
+    const paraIdx = remaining.lastIndexOf('\n\n', maxLen);
+    if (paraIdx > maxLen * 0.3) {
+      splitAt = paraIdx;
+    }
+
+    // Try single newline
+    if (splitAt === -1) {
+      const nlIdx = remaining.lastIndexOf('\n', maxLen);
+      if (nlIdx > maxLen * 0.3) {
+        splitAt = nlIdx;
+      }
+    }
+
+    // Try sentence boundary (. ! ?)
+    if (splitAt === -1) {
+      const sentenceRe = /[.!?]\s/g;
+      let lastMatch = -1;
+      let m: RegExpExecArray | null;
+      while ((m = sentenceRe.exec(remaining)) !== null) {
+        if (m.index + 1 > maxLen) break;
+        lastMatch = m.index + 1; // include the punctuation
+      }
+      if (lastMatch > maxLen * 0.3) {
+        splitAt = lastMatch;
+      }
+    }
+
+    // Hard cut at maxLen as last resort
+    if (splitAt === -1) {
+      splitAt = maxLen;
+    }
+
+    chunks.push(remaining.slice(0, splitAt).trimEnd());
+    remaining = remaining.slice(splitAt).trimStart();
+  }
+
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
 
 export interface WhatsAppChannelOpts {
   onMessage: OnInboundMessage;
@@ -373,23 +428,25 @@ export class WhatsAppChannel implements Channel {
       }
     }
 
+    const chunks = splitMessage(prefixed, WA_MAX_MESSAGE_LENGTH);
+
     if (!this.connected) {
-      this.outgoingQueue.push({ jid, text: prefixed });
-      logger.info({ jid, length: prefixed.length, queueSize: this.outgoingQueue.length }, 'WA disconnected, message queued');
+      for (const chunk of chunks) this.outgoingQueue.push({ jid, text: chunk });
+      logger.info({ jid, length: prefixed.length, chunks: chunks.length, queueSize: this.outgoingQueue.length }, 'WA disconnected, message queued');
       return;
     }
-    try {
-      const sent = await this.sock.sendMessage(jid, { text: prefixed });
-      if (sent?.key?.id) this.trackSentMessage(sent.key.id);
-      logger.info({ jid, length: prefixed.length }, 'Message sent');
-    } catch (err) {
-      // If send fails, queue it for retry
-      this.outgoingQueue.push({ jid, text: prefixed });
-      logger.warn({ jid, err, queueSize: this.outgoingQueue.length }, 'Failed to send, message queued');
-      // Schedule a delayed retry — 403 from groupMetadata is often transient
-      // (e.g. initial sync not yet complete) and resolves without reconnection
-      this.scheduleRetryFlush();
+    for (const chunk of chunks) {
+      try {
+        const sent = await this.sock.sendMessage(jid, { text: chunk });
+        if (sent?.key?.id) this.trackSentMessage(sent.key.id);
+      } catch (err) {
+        // Queue remaining chunk for retry
+        this.outgoingQueue.push({ jid, text: chunk });
+        logger.warn({ jid, err, queueSize: this.outgoingQueue.length }, 'Failed to send chunk, queued');
+        this.scheduleRetryFlush();
+      }
     }
+    logger.info({ jid, length: prefixed.length, chunks: chunks.length }, 'Message sent');
   }
 
   isConnected(): boolean {

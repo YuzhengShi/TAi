@@ -28,7 +28,6 @@ export interface SchedulerDependencies {
   getSessions: () => Record<string, string>;
   queue: GroupQueue;
   onProcess: (groupJid: string, proc: ChildProcess, containerName: string, groupFolder: string) => void;
-  sendMessage: (jid: string, text: string) => Promise<void>;
 }
 
 async function runTask(
@@ -119,8 +118,13 @@ async function runTask(
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
+          // Scheduled tasks (patrol, bootstrap, etc.) must NEVER send text output
+          // directly to students. Only explicit send_message MCP/IPC calls should
+          // reach them — those go through the IPC watcher path, not here.
+          logger.info(
+            { taskId: task.id, group: task.group_folder },
+            `Scheduled task output (suppressed): ${streamedOutput.result.slice(0, 200)}`,
+          );
           // Only reset idle timer on actual results, not session-update markers
           resetIdleTimer();
         }

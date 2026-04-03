@@ -60,6 +60,13 @@ export class GroupQueue {
 
     if (state.active) {
       state.pendingMessages = true;
+      // If a scheduled task is occupying this group's slot, close its stdin
+      // so it exits promptly instead of waiting for the full idle timeout.
+      // The student is waiting in real time; the task's work is already done.
+      if (state.runningTask && state.process?.stdin && !state.process.stdin.destroyed) {
+        logger.info({ groupJid }, 'Student message arrived during scheduled task, closing task stdin to expedite');
+        try { state.process.stdin.end(); } catch { /* already closed */ }
+      }
       logger.debug({ groupJid }, 'Container active, message queued');
       return;
     }
@@ -247,16 +254,16 @@ export class GroupQueue {
 
     const state = this.getGroup(groupJid);
 
-    // Tasks first (they won't be re-discovered from SQLite like messages)
-    if (state.pendingTasks.length > 0) {
-      const task = state.pendingTasks.shift()!;
-      this.runTask(groupJid, task);
+    // Messages first — student is waiting in real time
+    if (state.pendingMessages) {
+      this.runForGroup(groupJid, 'drain');
       return;
     }
 
-    // Then pending messages
-    if (state.pendingMessages) {
-      this.runForGroup(groupJid, 'drain');
+    // Then tasks (they won't be re-discovered from SQLite like messages)
+    if (state.pendingTasks.length > 0) {
+      const task = state.pendingTasks.shift()!;
+      this.runTask(groupJid, task);
       return;
     }
 
@@ -272,12 +279,12 @@ export class GroupQueue {
       const nextJid = this.waitingGroups.shift()!;
       const state = this.getGroup(nextJid);
 
-      // Prioritize tasks over messages
-      if (state.pendingTasks.length > 0) {
+      // Prioritize messages over tasks — student is waiting
+      if (state.pendingMessages) {
+        this.runForGroup(nextJid, 'drain');
+      } else if (state.pendingTasks.length > 0) {
         const task = state.pendingTasks.shift()!;
         this.runTask(nextJid, task);
-      } else if (state.pendingMessages) {
-        this.runForGroup(nextJid, 'drain');
       }
       // If neither pending, skip this group
     }
