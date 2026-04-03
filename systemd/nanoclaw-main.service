@@ -24,9 +24,7 @@ Environment=NODE_ENV=production
 
 # Security hardening
 NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=/home/nanoclaw/TAi /data /var/log/nanoclaw /var/run/docker.sock
-ProtectHome=read-only
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target

@@ -20,11 +20,9 @@ StandardError=append:/var/log/nanoclaw/voice.log
 Environment=TZ=America/Vancouver
 Environment=NODE_ENV=production
 
-# Security hardening
+# Security hardening (tsx needs /tmp writable for IPC pipes)
 NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=/home/nanoclaw/TAi /data /var/log/nanoclaw
-ProtectHome=read-only
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
