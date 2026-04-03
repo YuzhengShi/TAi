@@ -1,0 +1,30 @@
+[Unit]
+Description=TAi Voice Interview Server (Nova Sonic)
+After=nanoclaw-main.service
+BindsTo=nanoclaw-main.service
+
+[Service]
+Type=simple
+User=nanoclaw
+Group=nanoclaw
+WorkingDirectory=/home/nanoclaw/TAi
+ExecStart=/usr/bin/npx tsx voice/server.ts
+Restart=on-failure
+RestartSec=10
+
+# Logging
+StandardOutput=append:/var/log/nanoclaw/voice.log
+StandardError=append:/var/log/nanoclaw/voice.log
+
+# Environment
+Environment=TZ=America/Vancouver
+Environment=NODE_ENV=production
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/nanoclaw/TAi /data /var/log/nanoclaw
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

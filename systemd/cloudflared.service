@@ -1,0 +1,21 @@
+[Unit]
+Description=Cloudflare Quick Tunnel (Voice Interview HTTPS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nanoclaw
+Group=nanoclaw
+ExecStart=/home/nanoclaw/TAi/systemd/start-tunnel.sh
+Restart=on-failure
+RestartSec=5
+
+# Logging
+StandardOutput=append:/var/log/nanoclaw/tunnel.log
+StandardError=append:/var/log/nanoclaw/tunnel.log
+
+Environment=TZ=America/Vancouver
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+# Hourly S3 backup of WhatsApp auth + SQLite database
+# Install to /etc/cron.d/nanoclaw-backup
+0 * * * * nanoclaw aws s3 sync /data/store/ s3://tai-backups-prod/store/ --quiet --delete 2>> /var/log/nanoclaw/backup.log
+
+# Daily backup of student groups (COMPETENCY.md, CLAUDE.md, logs)
+30 2 * * * nanoclaw aws s3 sync /data/groups/ s3://tai-backups-prod/groups/ --quiet --delete 2>> /var/log/nanoclaw/backup.log

@@ -90,5 +90,28 @@ All paths relative to `process.cwd()`:
 ## Background Automation
 - **Teaching patrol**: weekday 9am, reads COMPETENCY.md + COURSE_STATUS.md, 10 intervention triggers
 - **Course sync**: every 6h (2am/8am/2pm/8pm), fetches Canvas + GitHub, writes COURSE_STATUS.md
+- **LeanRAG sync**: every 6h (src/leanrag-sync.ts), polls Canvas for new lecture files → downloads to cs6650-materials/ → triggers `python -m leanrag.build_graph` incremental rebuild
 - **Competency bootstrap**: one-time per student, Canvas grades → initial mastery scores
 - **Memory pruning**: decay-based TTL (permanent/stable/active/session/checkpoint)
+
+## LeanRAG Incremental Build
+- Per-chunk content-hash cache: SHA256[:16] of chunk text → extraction results
+- Stored in `leanrag/.cache/extraction_store.json` (persistent across runs)
+- One-time migration from old corpus-hash-keyed `entities_{hash}.json` files (sorted by mtime)
+- Embedding cache keyed by entity-set hash (sorted entity names → SHA256[:16])
+- New lectures: only extract/embed new chunks, reuse cached results for unchanged content
+- Saves periodic checkpoints during extraction (every SAVE_EVERY_N_CHUNKS)
+
+## Media Download Flow
+1. WhatsApp message with media → `downloadMedia()` in whatsapp.ts
+2. SUPPORTED_MEDIA_TYPES: imageMessage, documentMessage, stickerMessage, audioMessage
+3. File saved at: `DATA_DIR/ipc/{groupFolder}/media/{msgId}-{originalFileName}` (or `{msgId}.{ext}` if no fileName)
+4. Container sees: `/workspace/ipc/media/{filename}` (mount maps DATA_DIR/ipc/{group}/ → /workspace/ipc/)
+5. Agent receives: `[User sent a document "REPORT.md". Use your Read tool to view: /workspace/ipc/media/...]`
+6. If download fails: `[User sent "REPORT.md" — file could not be downloaded. TAi cannot access this file.]`
+7. MIME map includes: text/markdown, text/x-markdown, application/pdf, text/plain, docx, xlsx, pptx, zip, tar, gzip, plus programming types (py, go, java, js, ts, json, csv, html, xml, yaml, c, cpp). Falls back to extracting extension from original fileName when MIME is unknown.
+
+## Container Python Libraries
+- `/opt/leanrag/bin/python3` venv with: boto3, networkx, numpy, python-dotenv, mcp, requests, python-docx, pymupdf
+- System: pdftotext (poppler-utils), ffmpeg, chromium, git, unzip
+- Agent can parse PDFs via `pymupdf` (fitz), DOCX via `python-docx`, both accessible in Bash

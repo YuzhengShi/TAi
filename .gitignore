@@ -49,3 +49,9 @@ leanrag/__pycache__/
 
 # Cache
 .npm-cache/
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate*
+terraform/*.tfvars
+terraform/.terraform.lock.hcl

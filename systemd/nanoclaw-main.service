@@ -1,0 +1,32 @@
+[Unit]
+Description=TAi Main Process (WhatsApp + Agent Orchestrator)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=nanoclaw
+Group=nanoclaw
+WorkingDirectory=/home/nanoclaw/TAi
+ExecStartPre=/bin/bash -c 'docker network inspect nanoclaw-net >/dev/null 2>&1 || docker network create nanoclaw-net'
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=15
+
+# Logging
+StandardOutput=append:/var/log/nanoclaw/main.log
+StandardError=append:/var/log/nanoclaw/main.log
+
+# Environment
+Environment=TZ=America/Vancouver
+Environment=NODE_ENV=production
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/nanoclaw/TAi /data /var/log/nanoclaw /var/run/docker.sock
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

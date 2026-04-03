@@ -145,96 +145,19 @@ IDLE_TIMEOUT=1800000
 
 ## 5. Processes (systemd)
 
-Four systemd services. Run order: docker → cloudflared (captures URL, restarts main) → nanoclaw-main → nanoclaw-voice.
+Three systemd services (docker.service is system-provided). Service files live in `systemd/` in the repo. Migration script: `scripts/migrate-to-systemd.sh`.
 
-### nanoclaw-main.service
-
-```ini
-[Unit]
-Description=TAi Main Process
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=simple
-User=nanoclaw
-WorkingDirectory=/workspace/project
-ExecStart=/usr/bin/node dist/index.js
-Restart=on-failure
-RestartSec=10
-StandardOutput=append:/var/log/nanoclaw/main.log
-StandardError=append:/var/log/nanoclaw/main.log
-Environment=TZ=America/Vancouver
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### nanoclaw-voice.service
+Service files are in `systemd/` in the repo. See:
+- `systemd/nanoclaw-main.service` — main process (WhatsApp + agent orchestrator)
+- `systemd/nanoclaw-voice.service` — voice interview server (binds to nanoclaw-main)
+- `systemd/cloudflared.service` — Cloudflare quick tunnel
+- `systemd/start-tunnel.sh` — wrapper that captures tunnel URL, updates .env, restarts voice
+- `systemd/nanoclaw-logrotate` — log rotation config
+- `systemd/nanoclaw-backup` — S3 backup cron
 
 **Note:** `voice/` is outside `tsconfig.json` (`rootDir: "./src"`), so `npm run build` does NOT compile it. The voice server imports from `../src/env.js`, making it hard to add a separate tsconfig. Use `tsx` to run it directly in production — same as `npm run voice` does in dev.
 
-```ini
-[Unit]
-Description=TAi Voice Interview Server
-After=nanoclaw-main.service
-
-[Service]
-Type=simple
-User=nanoclaw
-WorkingDirectory=/workspace/project
-ExecStart=/usr/local/bin/npx tsx voice/server.ts
-Restart=on-failure
-RestartSec=10
-StandardOutput=append:/var/log/nanoclaw/voice.log
-StandardError=append:/var/log/nanoclaw/voice.log
-Environment=TZ=America/Vancouver
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### cloudflared.service
-
-Wrapper script auto-captures the quick tunnel URL and updates `.env`:
-
-```ini
-[Unit]
-Description=Cloudflare Quick Tunnel
-After=network.target
-
-[Service]
-Type=simple
-User=nanoclaw
-ExecStart=/usr/local/bin/start-tunnel.sh
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**/usr/local/bin/start-tunnel.sh:**
-
-```bash
-#!/bin/bash
-# Captures the random trycloudflare.com URL, writes to .env, restarts main
-
-ENV_FILE="/workspace/project/.env"
-
-cloudflared tunnel --url http://localhost:3001 2>&1 | while IFS= read -r line; do
-  URL=$(echo "$line" | grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com')
-  if [ -n "$URL" ]; then
-    sed -i "s|^VOICE_BASE_URL=.*|VOICE_BASE_URL=$URL|" "$ENV_FILE"
-    echo "[tunnel] Captured URL: $URL — restarting nanoclaw-main"
-    systemctl restart nanoclaw-main
-  fi
-done
-```
-
-```bash
-chmod +x /usr/local/bin/start-tunnel.sh
-```
+Tunnel wrapper needs passwordless sudo for service restarts. The migration script sets up `/etc/sudoers.d/nanoclaw-services` to allow this.
 
 ---
 
@@ -314,98 +237,94 @@ exec(`osascript -e 'display notification "${msg}" with title "NanoClaw" sound na
 
 ---
 
-## 10. First Deploy
+## 10. First Deploy (Planned)
 
+See below for what was actually executed.
+
+## 10a. Actual Deployment (2026-04-02)
+
+Instance: i-09d4c55b1ee1d96ce, t3.xlarge, us-west-2a
+Elastic IP: 52.12.72.115
+Data volume: /dev/nvme1n1 → /data (20 GB, pre-existing from prior instance)
+
+The instance came pre-configured (AMI or user-data) with:
+- Node 22.22.2, npm 10.9.7, Docker 28.2.2, git 2.34.1
+- nanoclaw user (with SSH keys at /home/nanoclaw/.ssh/, in docker group)
+- Data volume mounted at /data with existing store/, groups/, data/
+
+What was done manually:
 ```bash
-# 1. Launch t3.xlarge, attach 20 GB data volume
-#    - Ubuntu 22.04 LTS
-#    - Elastic IP associated
-#    - IAM instance role attached (Bedrock, Transcribe, Polly, S3)
+# SSH as ubuntu, then sudo to nanoclaw
+ssh -i ~/.ssh/tai-deploy ubuntu@52.12.72.115
 
-# 2. Format + mount data volume
-mkfs.ext4 /dev/xvdf                          # or nvme1n1 depending on instance
-mkdir -p /data
-echo '/dev/xvdf /data ext4 defaults,nofail 0 2' >> /etc/fstab
-mount /data
-mkdir -p /data/{store/auth,groups,data/{ipc,sessions,audit}}
+# Install pm2 globally
+sudo npm install -g pm2
 
-# 3. Install Node 22 + build tools + Docker
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt-get install -y nodejs build-essential python3 docker.io git
-npm install -g tsx
+# Clone as nanoclaw (has GitHub SSH keys)
+sudo -u nanoclaw bash -lc 'git clone git@github.com:YuzhengShi/tai-deploy.git ~/TAi'
 
-# 4. Install cloudflared
-curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
-  -o /usr/bin/cloudflared && chmod +x /usr/bin/cloudflared
+# Symlink runtime dirs to /data volume
+# NOTE: groups/ dir exists in repo (has global/ and main/), so must rm -rf first
+sudo -u nanoclaw bash -lc 'cd ~/TAi && rm -rf groups && ln -s /data/groups groups && ln -s /data/data data && ln -s /data/store store'
 
-# 5. Create service user
-useradd -m -s /bin/bash nanoclaw
-usermod -aG docker nanoclaw
-chown -R nanoclaw:nanoclaw /data
+# Install deps + build
+sudo -u nanoclaw bash -lc 'cd ~/TAi && npm ci && npm run build'
 
-# 6. Clone + build
-git clone <YOUR_REPO> /workspace/project
-chown -R nanoclaw:nanoclaw /workspace/project
-cd /workspace/project
+# Create .env (no AWS keys — instance role provides them)
+sudo -u nanoclaw bash -lc 'cat > ~/TAi/.env << EOF
+ASSISTANT_NAME="TAi"
+AWS_REGION=us-west-2
+ANTHROPIC_MODEL="us.anthropic.claude-sonnet-4-6"
+ANTHROPIC_MODEL_LIGHT="us.anthropic.claude-haiku-4-5-20251001-v1:0"
+CANVAS_API_TOKEN=...
+CANVAS_BASE_URL=https://northeastern.instructure.com/api/v1
+CANVAS_COURSE_ID=245693
+GITHUB_BASE_URL=https://github.khoury.northeastern.edu/api/v3
+GITHUB_TOKEN=...
+GITHUB_TOKEN_PUBLIC=...
+YOUTUBE_API_KEY=...
+YT_TRANSCRIPT_URL=http://yt-transcript-api:8000
+YT_TRANSCRIPT_TOKEN=...
+VOICE_INTERVIEW_SECRET=...
+VOICE_BASE_URL=https://placeholder.trycloudflare.com
+EOF'
 
-# 7. Symlink persistent data
-ln -s /data/store  /workspace/project/store
-ln -s /data/groups /workspace/project/groups
-ln -s /data/data   /workspace/project/data
-
-# 8. Copy existing data from dev machine (scp from Windows)
-#    scp -r store/auth/ ec2:/data/store/auth/
-#    scp store/messages.db ec2:/data/store/
-#    scp -r groups/ ec2:/data/groups/
-#    scp .env ec2:/workspace/project/.env
-
-# 9. Install deps + compile
-npm install
-npm run build
-
-# 10. Docker setup
-docker network create nanoclaw-net
-docker build -t nanoclaw-agent:latest ./container
-# Start yt-transcript if needed:
-# docker run -d --name yt-transcript --network nanoclaw-net --restart unless-stopped yt-transcript-api:latest
-
-# 11. Set up logs + logrotate
-mkdir -p /var/log/nanoclaw
-chown nanoclaw:nanoclaw /var/log/nanoclaw
-# Copy logrotate config to /etc/logrotate.d/nanoclaw
-
-# 12. Install systemd services
-# Copy .service files to /etc/systemd/system/
-# Copy start-tunnel.sh to /usr/local/bin/
-systemctl daemon-reload
-systemctl enable cloudflared nanoclaw-main nanoclaw-voice
-
-# 13. Start everything
-systemctl start cloudflared          # captures tunnel URL, restarts main automatically
-systemctl start nanoclaw-voice
-
-# 14. First run: watch logs for WhatsApp QR code
-journalctl -u nanoclaw-main -f       # scan QR from terminal
-
-# 15. Set up backup cron
-# Add /etc/cron.d/nanoclaw-backup
+# Start with pm2
+sudo -u nanoclaw bash -lc 'cd ~/TAi && pm2 start dist/index.js --name tai'
 ```
+
+Docker image (nanoclaw-agent:latest, 3.14 GB) and network (nanoclaw-net) were already present from prior setup.
+
+### Important: Only One Host Process
+Never run `npm run dev` and pm2 simultaneously. Both will connect to WhatsApp and respond to every message twice. Use pm2 only:
+```bash
+sudo -u nanoclaw bash -lc 'pm2 restart tai'    # restart
+sudo -u nanoclaw bash -lc 'pm2 logs tai'       # view logs
+sudo -u nanoclaw bash -lc 'pm2 stop tai'       # stop
+```
+If duplicate responses appear, check: `ps aux | grep 'node.*index' | grep -v grep` — should show only one `dist/index.js` process (pm2's).
+
+### Gotchas Encountered
+- `ubuntu` user can SSH but nanoclaw owns the code/data
+- `nanoclaw` user had EACCES on pm2 daemon spawn initially — resolved after `sudo npm install -g pm2`
+- The repo's `groups/` dir has committed subdirs (global/, main/) — must `rm -rf groups` before symlinking to /data/groups (which has those + all student folders)
+- HTTPS clone fails on EC2 (no TTY for username prompt) — use nanoclaw's SSH keys instead
+- Old EC2 IPs in known_hosts are stale — new instance got new Elastic IP
 
 ---
 
 ## 11. Updates
 
 ```bash
-cd /workspace/project
-git pull
-npm install        # if deps changed
-npm run build      # recompile src/
+# SSH in and pull
+sudo -u nanoclaw bash -lc 'cd ~/TAi && git pull origin main && npm run build'
 
-systemctl restart nanoclaw-main    # 2-3s WhatsApp reconnect gap (messages queue)
-systemctl restart nanoclaw-voice   # if voice/ files changed
+# Restart services
+sudo systemctl restart nanoclaw-main    # 2-3s WhatsApp reconnect gap (messages queue)
+sudo systemctl restart nanoclaw-voice   # if voice/ files changed
 
 # Only rebuild Docker image if container/Dockerfile or container/scripts/ changed:
-docker build -t nanoclaw-agent:latest ./container
+sudo -u nanoclaw bash -lc 'cd ~/TAi && docker build -t nanoclaw-agent:latest ./container'
 ```
 
 Agent containers mount `container/agent-runner/src` read-only at runtime — source changes take effect on next container spawn without image rebuild.
