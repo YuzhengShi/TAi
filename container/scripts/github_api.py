@@ -10,9 +10,12 @@ except ImportError:
     print(json.dumps({"error": "requests library not installed"}))
     sys.exit(1)
 
+# Khoury GHE (default)
 TOKEN = os.environ.get('GITHUB_TOKEN', '')
-# Default: github.com. For GitHub Enterprise, set GITHUB_BASE_URL (e.g. https://github.khoury.northeastern.edu/api/v3)
-BASE_URL = os.environ.get('GITHUB_BASE_URL', 'https://api.github.com')
+BASE_URL = os.environ.get('GITHUB_BASE_URL', 'https://github.khoury.northeastern.edu/api/v3')
+# Public github.com (used when host="github.com" in request params)
+TOKEN_PUBLIC = os.environ.get('GITHUB_TOKEN_PUBLIC', '')
+BASE_URL_PUBLIC = 'https://api.github.com'
 MAX_PAGES = 3
 TIMEOUT = 15
 
@@ -48,8 +51,21 @@ def api_get(endpoint, params=None):
 
 
 def handle(req):
+    global BASE_URL, TOKEN
     action = req.get("action", "")
     params = req.get("params", {})
+
+    # Per-request host override: pass "host": "github.com" to use public GitHub
+    host = params.pop("host", "")
+    if host == "github.com":
+        BASE_URL = BASE_URL_PUBLIC
+        TOKEN = TOKEN_PUBLIC
+    else:
+        BASE_URL = os.environ.get('GITHUB_BASE_URL', 'https://github.khoury.northeastern.edu/api/v3')
+        TOKEN = os.environ.get('GITHUB_TOKEN', '')
+
+    if not TOKEN:
+        return {"error": f"No token for {'github.com' if host == 'github.com' else 'GHE'}. Set {'GITHUB_TOKEN_PUBLIC' if host == 'github.com' else 'GITHUB_TOKEN'} in .env"}
 
     if action == "list_repos":
         org = params.get("org")
@@ -194,10 +210,6 @@ try:
     if not raw:
         print(json.dumps({"error": "No input provided"}))
         sys.exit(1)
-    if not TOKEN:
-        print(json.dumps({"error": "GITHUB_TOKEN not set. Add it to .env"}))
-        sys.exit(1)
-
     req = json.loads(raw)
     result = handle(req)
     print(json.dumps(result, indent=2, default=str))
