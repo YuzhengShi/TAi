@@ -225,10 +225,11 @@ function buildVolumeMounts(
 let cachedInstanceCreds: { accessKeyId: string; secretAccessKey: string; sessionToken: string; expiration: string } | null = null;
 
 async function fetchInstanceRoleCreds(): Promise<typeof cachedInstanceCreds> {
-  // Return cached if still valid (refresh 5 min before expiry)
+  // Return cached if still valid. Refresh 35 min before expiry so containers
+  // (up to 30 min timeout) never run with expired credentials.
   if (cachedInstanceCreds) {
     const expiresAt = new Date(cachedInstanceCreds.expiration).getTime();
-    if (Date.now() < expiresAt - 5 * 60 * 1000) return cachedInstanceCreds;
+    if (Date.now() < expiresAt - 35 * 60 * 1000) return cachedInstanceCreds;
   }
   try {
     const res = await fetch('http://169.254.169.254/latest/meta-data/iam/security-credentials/');
