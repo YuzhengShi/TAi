@@ -332,6 +332,11 @@ export class WhatsAppChannel implements Channel {
                 } else if (mime.includes('zip') || mime.includes('tar') || mime.includes('gzip')) {
                   label = origName ? `an archive "${origName}"` : `an archive (${mime})`;
                   hint = ' Use Bash to extract it (unzip for .zip, tar for .tar/.tar.gz).';
+                } else if (mime.includes('wordprocessingml') || mime.includes('spreadsheetml') || mime.includes('presentationml') || mime === 'application/msword' || mime === 'application/vnd.ms-excel') {
+                  const ext = origName?.split('.').pop()?.toLowerCase() || '';
+                  const typeLabel = ext === 'xlsx' || ext === 'xls' ? 'spreadsheet' : ext === 'pptx' || ext === 'ppt' ? 'presentation' : 'Word document';
+                  label = origName ? `a ${typeLabel} "${origName}"` : `a ${typeLabel}`;
+                  hint = ` This is an Office file — don't use Read. Convert to text first: /opt/leanrag/bin/python3 /opt/scripts/convert_office.py ${mediaPath}`;
                 } else {
                   label = origName ? `a document "${origName}"` : `a document (${mime})`;
                 }
