@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 User=nanoclaw
 Group=nanoclaw
-ExecStart=/home/nanoclaw/TAi/systemd/start-tunnel.sh
+ExecStart=/bin/bash /home/nanoclaw/TAi/systemd/start-tunnel.sh
 Restart=on-failure
 RestartSec=5
 
