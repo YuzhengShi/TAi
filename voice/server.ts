@@ -11,7 +11,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { readEnvFile } from '../src/env.js';
 import { writeInterviewResults } from './competency-writer.js';
 import { loadInterviewContext, loadInterviewMetadata } from './context-loader.js';
-import { consumeToken, generateToken, validateToken } from './interview-token.js';
+import { consumeToken, generateToken, markTokenCompleted, validateToken } from './interview-token.js';
 import { SessionManager } from './session-manager.js';
 import { InterviewSummary } from './types.js';
 
@@ -70,14 +70,13 @@ io.on('connection', (socket) => {
   let manager: SessionManager | null = null;
 
   socket.on('start_interview', async (data: { token: string }) => {
-    // consumeToken: validates + marks as single-use (replay protection)
     const payload = consumeToken(data.token);
     if (!payload) {
-      socket.emit('error', { message: 'Invalid, expired, or already-used token' });
+      socket.emit('error', { message: 'Invalid, expired, or already-used token. Request a new link from TAi.' });
       return;
     }
 
-    console.log(`Starting interview for ${payload.folder}`);
+    console.log(`Starting interview for ${payload.folder} (attempt ${data.token.slice(-8)})`);
     socket.emit('status', { phase: 'loading', message: 'Loading your course data...' });
 
     try {
@@ -95,6 +94,7 @@ io.on('connection', (socket) => {
         // onDone — interview complete
         (summary: InterviewSummary) => {
           console.log(`Interview done for ${payload.folder}: ${summary.durationMinutes}min`);
+          markTokenCompleted(data.token);
           socket.emit('interview_done', {
             duration: summary.durationMinutes,
             rubric: summary.rubric,
@@ -118,6 +118,7 @@ io.on('connection', (socket) => {
 
       // Start the Nova Sonic session
       await manager.start();
+      markTokenCompleted(data.token);
       socket.emit('status', { phase: 'active', message: 'Interview started' });
     } catch (err) {
       console.error('Interview start error:', err);

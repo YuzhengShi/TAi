@@ -31,7 +31,12 @@ class InterviewClient {
     this.socket.on('status', (data) => this.setStatus(data.phase, data.message));
     this.socket.on('audio_chunk', (base64) => this.queueAudio(base64));
     this.socket.on('interview_done', (data) => this.onInterviewDone(data));
-    this.socket.on('error', (data) => this.setStatus('error', data.message));
+    this.socket.on('error', (data) => {
+      this.setStatus('error', data.message);
+      this.cleanup();
+      document.getElementById('start-btn').style.display = 'inline-block';
+      document.getElementById('start-btn').textContent = 'Retry';
+    });
     this.socket.on('disconnect', () => this.setStatus('disconnected', 'Connection lost. Please refresh.'));
     try {
       const resp = await fetch(`/api/context/${this.token}`);
