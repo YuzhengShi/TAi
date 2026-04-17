@@ -1075,7 +1075,13 @@ The interview asks targeted questions about THEIR specific work — "I see you u
     const json = Buffer.from(payload).toString('base64url');
     const sig = createHmac('sha256', secret).update(json).digest('hex');
     const token = `${json}.${sig}`;
-    const baseUrl = process.env.VOICE_BASE_URL || `http://localhost:${process.env.VOICE_PORT || '3001'}`;
+    let baseUrl = process.env.VOICE_BASE_URL || `http://localhost:${process.env.VOICE_PORT || '3001'}`;
+    for (const p of ['/workspace/global/tunnel-url.txt', '/workspace/project/groups/global/tunnel-url.txt']) {
+      try {
+        const live = fs.readFileSync(p, 'utf-8').trim();
+        if (live) { baseUrl = live; break; }
+      } catch { /* not available at this path */ }
+    }
     const url = `${baseUrl}/interview/${token}`;
 
     const hasCanvas = !!process.env.CANVAS_API_TOKEN;
