@@ -19,6 +19,9 @@ const SESSION_WARN_MS = 7 * 60 * 1000;
 const SESSION_HARD_LIMIT_MS = 7.5 * 60 * 1000;
 /** Max total interview duration. */
 const MAX_INTERVIEW_MS = 20 * 60 * 1000;
+/** Max retries when Nova Sonic returns a content filter error. */
+const MAX_START_RETRIES = 2;
+const RETRY_DELAY_MS = 2000;
 
 export class SessionManager {
   private state: SessionState;
@@ -29,6 +32,7 @@ export class SessionManager {
   private onAudio: (chunk: Buffer) => void;
   private onDone: (summary: InterviewSummary) => void;
   private warningSent = false;
+  private startupPhase = false;
 
   constructor(
     context: InterviewContext,
@@ -50,9 +54,23 @@ export class SessionManager {
     };
   }
 
-  /** Start the first session. */
+  /** Start the first session (with retry on content filter). */
   async start(): Promise<void> {
-    await this.startSession(this.context.systemPrompt);
+    for (let attempt = 0; attempt <= MAX_START_RETRIES; attempt++) {
+      try {
+        await this.startSession(this.context.systemPrompt);
+        return;
+      } catch (err) {
+        const msg = (err as Error).message || '';
+        const isContentFilter = msg.includes('content filter');
+        if (isContentFilter && attempt < MAX_START_RETRIES) {
+          console.warn(`[session-manager] Content filter on attempt ${attempt + 1}, retrying in ${RETRY_DELAY_MS}ms...`);
+          await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+          continue;
+        }
+        throw err;
+      }
+    }
   }
 
   /** Send audio from the browser to Nova Sonic. */
@@ -74,6 +92,7 @@ export class SessionManager {
     this.session = new NovaSonicSession();
     this.state.startTime = Date.now();
     this.warningSent = false;
+    this.startupPhase = true;
 
     // Wire events
     this.session.on('audio', (chunk: Buffer) => {
@@ -142,14 +161,18 @@ export class SessionManager {
     this.session.on('error', (err) => {
       console.error('Nova Sonic error:', err);
       this.stopTimer();
-      this.onDone(this.buildSummary());
+      // During startup, start() handles the error via retry — don't fire onDone
+      if (!this.startupPhase) {
+        this.onDone(this.buildSummary());
+      }
     });
 
-    // Start timer
-    this.startTimer();
-
-    // Start the Nova Sonic session
+    // Start the Nova Sonic session (awaits first output event or throws on content filter)
     await this.session.start(systemPrompt);
+    this.startupPhase = false;
+
+    // Start timer only after confirmed connection
+    this.startTimer();
   }
 
   private startTimer(): void {

@@ -65,6 +65,9 @@ export class NovaSonicSession extends EventEmitter {
   private promptName: string;
   private audioContentName: string;
   private sendCount = 0;
+  private ready = false;
+  private readyResolve: (() => void) | null = null;
+  private readyReject: ((err: Error) => void) | null = null;
   constructor() {
     super();
     this.promptName = randomUUID();
@@ -154,26 +157,58 @@ export class NovaSonicSession extends EventEmitter {
       },
     });
 
+    // Send a small burst of silence to establish the audio channel.
+    // Too many real-time audio chunks before Nova Sonic responds triggers content filters.
+    const initialSilence = Buffer.alloc(3200).toString('base64');
+    for (let i = 0; i < 5; i++) {
+      this.enqueueEvent({
+        audioInput: {
+          promptName: this.promptName,
+          contentName: this.audioContentName,
+          content: initialSilence,
+        },
+      });
+    }
+
     // Create the bidirectional stream
     const command = new InvokeModelWithBidirectionalStreamCommand({
       modelId: MODEL_ID,
       body: this.createInputStream(),
     });
 
+    // Wait for the first output event (proving session is alive) or an early error.
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      this.readyResolve = resolve;
+      this.readyReject = reject;
+    });
+
     try {
       const response = await client.send(command);
       // Process output stream in background
       this.processOutputStream(response.body!).catch(err => {
+        if (this.readyReject) {
+          this.readyReject(err);
+          this.readyResolve = null;
+          this.readyReject = null;
+        }
         if (!this.closed) this.emit('error', err);
       });
     } catch (err) {
+      if (this.readyReject) {
+        this.readyReject(err as Error);
+        this.readyResolve = null;
+        this.readyReject = null;
+      }
       this.emit('error', err as Error);
+      return;
     }
+
+    return readyPromise;
   }
 
   /** Send a PCM audio chunk (16kHz mono s16le). */
   sendAudio(pcmChunk: Buffer): void {
-    if (this.closed) return;
+    if (this.closed || !this.ready) return;
     this.enqueueEvent({
       audioInput: {
         promptName: this.promptName,
@@ -308,6 +343,14 @@ export class NovaSonicSession extends EventEmitter {
   }
 
   private handleOutputEvent(event: Record<string, unknown>): void {
+    if (!this.ready) {
+      this.ready = true;
+      if (this.readyResolve) {
+        this.readyResolve();
+        this.readyResolve = null;
+        this.readyReject = null;
+      }
+    }
     const inner = (event.event ?? event) as Record<string, unknown>;
     const eventType = Object.keys(inner)[0] || 'unknown';
     // Always log full output events (they're infrequent and important)

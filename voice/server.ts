@@ -94,7 +94,10 @@ io.on('connection', (socket) => {
         // onDone — interview complete
         (summary: InterviewSummary) => {
           console.log(`Interview done for ${payload.folder}: ${summary.durationMinutes}min`);
-          markTokenCompleted(data.token);
+          // Only permanently consume the token if the interview actually ran
+          if (summary.durationMinutes > 0 || summary.transcript.length > 0) {
+            markTokenCompleted(data.token);
+          }
           socket.emit('interview_done', {
             duration: summary.durationMinutes,
             rubric: summary.rubric,
@@ -102,11 +105,13 @@ io.on('connection', (socket) => {
             weaknesses: summary.weaknesses,
           });
 
-          // Write results to COMPETENCY.md
-          try {
-            writeInterviewResults(summary);
-          } catch (err) {
-            console.error('Failed to write interview results:', err);
+          // Only write results if the interview actually happened
+          if (summary.durationMinutes > 0 || summary.transcript.length > 0) {
+            try {
+              writeInterviewResults(summary);
+            } catch (err) {
+              console.error('Failed to write interview results:', err);
+            }
           }
 
           activeInterviews.delete(socket.id);
@@ -118,7 +123,6 @@ io.on('connection', (socket) => {
 
       // Start the Nova Sonic session
       await manager.start();
-      markTokenCompleted(data.token);
       socket.emit('status', { phase: 'active', message: 'Interview started' });
     } catch (err) {
       console.error('Interview start error:', err);
