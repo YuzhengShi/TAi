@@ -7,7 +7,7 @@
  * Opens the URL, handles Microsoft login if redirected, then outputs page text.
  */
 import { execSync } from 'child_process';
-import puppeteer from '/usr/local/lib/node_modules/puppeteer-core/lib/esm/puppeteer/puppeteer-core.js';
+import puppeteer from 'puppeteer-core';
 
 const url = process.argv[2];
 if (!url) {
