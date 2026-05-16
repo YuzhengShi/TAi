@@ -184,68 +184,51 @@ try {
   // Wait for transcript to load
   await new Promise(r => setTimeout(r, 10000));
 
-  // Try to open transcript panel and capture the API response
-  let transcriptFromClick = '';
-  const transcriptListener = async (response) => {
-    const u = response.url();
-    if (u.includes('transcript') || u.includes('cdnmedia') || u.includes('.vtt')) {
-      try {
-        const buf = await response.buffer();
-        const text = buf.toString('utf8');
-        if (text.length > 50) transcriptFromClick = text;
-      } catch {}
-    }
-  };
-  page.on('response', transcriptListener);
+  // Extract MSAL access token from localStorage and call transcript API directly
+  await new Promise(r => setTimeout(r, 5000));
 
-  // Find and click the Transcript button
-  const clicked = await page.evaluate(() => {
-    const buttons = [...document.querySelectorAll('button, [role="button"]')];
-    const btn = buttons.find(b =>
-      b.textContent?.toLowerCase().includes('transcript') ||
-      b.getAttribute('aria-label')?.toLowerCase().includes('transcript')
-    );
-    if (btn) { btn.click(); return true; }
-    return false;
-  });
-  process.stderr.write('[transcript] button clicked: ' + clicked + '\n');
-
-  // Wait for transcript panel to render
-  await new Promise(r => setTimeout(r, 3000));
-
-  // Handle "Sign In" button inside transcript panel
-  const signInClicked = await page.evaluate(() => {
-    const btns = [...document.querySelectorAll('button, [role="button"], a')];
-    const btn = btns.find(b => /sign in/i.test(b.textContent));
-    if (btn) { btn.click(); return true; }
-    return false;
-  });
-  process.stderr.write('[transcript] sign-in btn clicked: ' + signInClicked + '\n');
-
-  if (signInClicked) {
-    await new Promise(r => setTimeout(r, 10000));
-    process.stderr.write('[transcript] current url after sign-in: ' + page.url() + '\n');
-
-    // If redirected to login, re-apply cookies and navigate back
-    if (page.url().includes('login.microsoftonline.com') || page.url().includes('login.live.com')) {
-      const savedCookiesReauth = await loadSession();
-      if (savedCookiesReauth) {
-        await page.setCookie(...savedCookiesReauth);
+  const transcriptResult = await page.evaluate(async () => {
+    // Find MSAL access tokens in localStorage
+    const tokens = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      const val = localStorage.getItem(key);
+      if (key.includes('accesstoken') || key.includes('AccessToken')) {
+        try {
+          const parsed = JSON.parse(val);
+          if (parsed.secret) tokens[key] = parsed;
+        } catch {}
       }
-      await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-      await new Promise(r => setTimeout(r, 15000));
-    } else {
-      // Sign in may have completed in-page, wait for transcript to load
-      await new Promise(r => setTimeout(r, 10000));
     }
-  } else {
-    // No sign-in needed, wait for transcript API response
-    await new Promise(r => setTimeout(r, 5000));
-  }
 
-  page.off('response', transcriptListener);
+    // Also check for any token with scope containing 'stream' or 'sharepoint'
+    const tokenKeys = Object.keys(tokens);
+    if (tokenKeys.length === 0) return { error: 'no MSAL tokens found', lsKeys: Object.keys(localStorage).filter(k => k.includes('msal') || k.includes('token')).slice(0, 10) };
 
-  if (transcriptFromClick) transcriptBody = transcriptFromClick;
+    // Use first available token
+    const token = tokens[tokenKeys[0]].secret;
+
+    // Get the file ID from the current URL to construct transcript API URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const fileId = urlParams.get('id');
+    if (!fileId) return { error: 'no file id in URL' };
+
+    // Call the stream API to get transcript
+    const apiUrl = `/personal/m_coady_northeastern_edu/_api/v2.1/drives/me/items/${encodeURIComponent(fileId)}/media/transcripts`;
+    try {
+      const resp = await fetch(apiUrl, {
+        headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' }
+      });
+      const text = await resp.text();
+      return { status: resp.status, body: text.substring(0, 500), tokenFound: true };
+    } catch(e) {
+      return { error: e.message, token: token.substring(0, 30) };
+    }
+  });
+
+  process.stderr.write('[transcript] result: ' + JSON.stringify(transcriptResult).substring(0, 300) + '\n');
+
+  if (transcriptResult && transcriptResult.body) transcriptBody = transcriptResult.body;
 
   // Output page info + transcript
   const finalUrl = page.url();
