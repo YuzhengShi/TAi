@@ -280,6 +280,8 @@ async function readSecrets(useLight = false): Promise<Record<string, string>> {
     'VOICE_PORT',
     'VOICE_BASE_URL',
     'GITHUB_ALLOWED_ORGS',
+    'MS_EMAIL',
+    'MS_PASSWORD',
   ]);
 
   // Fall back to process.env for AWS credentials (e.g. AWS sandbox/EC2 roles)

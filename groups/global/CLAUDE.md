@@ -53,7 +53,17 @@ agent-browser open <url>
 agent-browser snapshot    # see page content
 agent-browser text        # extract readable text
 ```
-Rules: READ-ONLY. Never click submit/post/edit/delete. Only read and summarize. Check `/workspace/global/COURSE_STATUS.md` first — the sync task may have already summarized the link. If a page requires non-Canvas login, skip it.
+Rules: READ-ONLY. Never click submit/post/edit/delete. Only read and summarize. Check `/workspace/global/COURSE_STATUS.md` first — the sync task may have already summarized the link.
+
+### Microsoft SharePoint/OneDrive Authentication
+When accessing SharePoint or OneDrive URLs (`*.sharepoint.com`, `onedrive.live.com`), the browser will redirect to `login.microsoftonline.com`. Authenticate automatically:
+1. Read credentials: run `echo $MS_EMAIL` and `echo $MS_PASSWORD` in Bash (available as env vars)
+2. On the email page: type the email value into the email/username field, click Next
+3. On the password page: type the password value into the password field, click "Sign in"
+4. If "Stay signed in?" appears, click "Yes"
+5. Wait for redirect back to SharePoint content, then continue browsing
+
+Never log, display, or include credentials in responses. If MFA is required and cannot be completed, skip the page.
 
 ### YouTube Videos (`youtube_info` + `youtube_transcript`)
 When you encounter a YouTube link (from Canvas, announcements, or students):
