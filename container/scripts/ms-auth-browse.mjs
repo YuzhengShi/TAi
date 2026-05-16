@@ -42,10 +42,11 @@ try {
     await page.click('input[type="submit"], #idSIButton9');
     await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
 
-    // Password step
-    await page.waitForSelector('input[type="password"], input[name="passwd"]', { timeout: 10000 });
-    await page.type('input[type="password"], input[name="passwd"]', password, { delay: 50 });
-    await page.click('input[type="submit"], #idSIButton9');
+    // Password step — use Microsoft's actual field ID, wait for it to be interactive
+    await page.waitForSelector('#i0118, input[name="passwd"]', { timeout: 15000, visible: true });
+    await new Promise(r => setTimeout(r, 1000));
+    await page.type('#i0118, input[name="passwd"]', password, { delay: 80 });
+    await page.click('#idSIButton9');
     await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
 
     // "Stay signed in?" prompt
