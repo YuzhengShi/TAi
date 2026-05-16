@@ -33,8 +33,8 @@ RUN apt-get update && apt-get install -y \
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Install puppeteer-core for SharePoint auth script
-RUN npm install -g puppeteer-core
+# Install puppeteer-core and AWS SDK for SharePoint auth script
+RUN npm install -g puppeteer-core @aws-sdk/client-s3
 
 # Install Python 3 + venv for LeanRAG MCP server
 RUN apt-get update && apt-get install -y --no-install-recommends \

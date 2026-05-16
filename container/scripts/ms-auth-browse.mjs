@@ -6,13 +6,15 @@
  * Reads MS_EMAIL and MS_PASSWORD from environment.
  * Persists session cookies to S3 so Duo MFA only needed once.
  */
-import { execSync } from 'child_process';
 import fs from 'fs';
 import puppeteer from 'puppeteer-core';
+import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 
 const S3_BUCKET = 'tai-backups-prod';
 const S3_KEY = 'ms-session.json';
 const LOCAL_SESSION = '/tmp/ms-session.json';
+
+const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-west-2' });
 
 const url = process.argv[2];
 if (!url) {
@@ -28,10 +30,11 @@ if (!email || !password) {
 }
 
 // Try to load saved session from S3
-function loadSession() {
+async function loadSession() {
   try {
-    execSync(`aws s3 cp s3://${S3_BUCKET}/${S3_KEY} ${LOCAL_SESSION} --quiet 2>/dev/null`, { stdio: 'pipe' });
-    const cookies = JSON.parse(fs.readFileSync(LOCAL_SESSION, 'utf-8'));
+    const resp = await s3.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: S3_KEY }));
+    const body = await resp.Body.transformToString();
+    const cookies = JSON.parse(body);
     console.error('[auth] Session loaded from S3');
     return cookies;
   } catch {
@@ -41,10 +44,14 @@ function loadSession() {
 }
 
 // Save session to S3 after successful auth
-function saveSession(cookies) {
+async function saveSession(cookies) {
   try {
-    fs.writeFileSync(LOCAL_SESSION, JSON.stringify(cookies));
-    execSync(`aws s3 cp ${LOCAL_SESSION} s3://${S3_BUCKET}/${S3_KEY} --quiet`, { stdio: 'pipe' });
+    await s3.send(new PutObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: S3_KEY,
+      Body: JSON.stringify(cookies),
+      ContentType: 'application/json',
+    }));
     console.error('[auth] Session saved to S3');
   } catch (e) {
     console.error(`[auth] Failed to save session: ${e.message}`);
@@ -62,7 +69,7 @@ try {
   await page.setViewport({ width: 1280, height: 900 });
 
   // Load saved cookies before navigating
-  const savedCookies = loadSession();
+  const savedCookies = await loadSession();
   if (savedCookies) {
     await page.setCookie(...savedCookies);
   }
@@ -105,8 +112,14 @@ try {
               !window.location.href.includes('login.microsoftonline.com') &&
               !window.location.href.includes('login.live.com'),
         { timeout: 120000 }
-      ).catch(() => {
-        console.error('[auth] Duo timeout — approval may not have completed');
+      ).catch(async () => {
+        const currentUrl = page.url();
+        if (!currentUrl.includes('duosecurity.com') &&
+            !currentUrl.includes('login.microsoftonline.com')) {
+          console.error('[auth] Duo approved — continuing');
+        } else {
+          console.error('[auth] Duo timeout — approval may not have completed');
+        }
       });
     }
 
@@ -128,7 +141,7 @@ try {
   if (didAuth || savedCookies) {
     const cookies = await page.cookies();
     if (cookies.length > 0 && !page.url().includes('login.microsoftonline.com')) {
-      saveSession(cookies);
+      await saveSession(cookies);
     }
   }
 
