@@ -55,7 +55,15 @@ try {
       await page.$('iframe[src*="duosecurity.com"]').then(f => !!f).catch(() => false);
 
     if (isDuo) {
-      console.error('[auth] Duo MFA detected — push sent automatically, waiting up to 60s for approval...');
+      // Extract and print the verification code immediately so the agent can relay it
+      const pageText = await page.evaluate(() => document.body?.innerText || '');
+      const codeMatch = pageText.match(/(\d{2,3}\s?\d{2,3})/);
+      if (codeMatch) {
+        console.error(`[auth] Duo verification code: ${codeMatch[0]}`);
+      } else {
+        console.error('[auth] Duo MFA detected — no code found on page, waiting for push approval...');
+      }
+      console.error('[auth] Waiting up to 60s for approval...');
       await page.waitForFunction(
         () => !window.location.href.includes('duosecurity.com') &&
               !window.location.href.includes('login.microsoftonline.com') &&
