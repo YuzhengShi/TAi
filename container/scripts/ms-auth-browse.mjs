@@ -184,6 +184,38 @@ try {
   // Wait for transcript to load
   await new Promise(r => setTimeout(r, 10000));
 
+  // Try to open transcript panel and capture the API response
+  let transcriptFromClick = '';
+  const transcriptListener = async (response) => {
+    const u = response.url();
+    if (u.includes('transcript') || u.includes('cdnmedia') || u.includes('.vtt')) {
+      try {
+        const buf = await response.buffer();
+        const text = buf.toString('utf8');
+        if (text.length > 50) transcriptFromClick = text;
+      } catch {}
+    }
+  };
+  page.on('response', transcriptListener);
+
+  // Find and click the Transcript button
+  const clicked = await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll('button, [role="button"]')];
+    const btn = buttons.find(b =>
+      b.textContent?.toLowerCase().includes('transcript') ||
+      b.getAttribute('aria-label')?.toLowerCase().includes('transcript')
+    );
+    if (btn) { btn.click(); return true; }
+    return false;
+  });
+  process.stderr.write('[transcript] button clicked: ' + clicked + '\n');
+
+  // Wait for transcript API response
+  await new Promise(r => setTimeout(r, 8000));
+  page.off('response', transcriptListener);
+
+  if (transcriptFromClick) transcriptBody = transcriptFromClick;
+
   // Output page info + transcript
   const finalUrl = page.url();
   const title = await page.title();
