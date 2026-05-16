@@ -34,8 +34,7 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Install puppeteer-core for SharePoint auth script
-RUN npm install -g puppeteer-core \
-    && ln -s /usr/local/lib/node_modules /opt/scripts/node_modules
+RUN npm install -g puppeteer-core
 
 # Install Python 3 + venv for LeanRAG MCP server
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -61,6 +60,7 @@ RUN npm install
 
 # Copy helper scripts (TTS, etc.)
 COPY scripts/ /opt/scripts/
+RUN ln -s /usr/local/lib/node_modules /opt/scripts/node_modules
 
 # Copy source code
 COPY agent-runner/ ./
