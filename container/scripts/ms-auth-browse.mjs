@@ -63,12 +63,12 @@ try {
       } else {
         console.error('[auth] Duo MFA detected — no code found on page, waiting for push approval...');
       }
-      console.error('[auth] Waiting up to 60s for approval...');
+      console.error('[auth] Waiting up to 120s for approval...');
       await page.waitForFunction(
         () => !window.location.href.includes('duosecurity.com') &&
               !window.location.href.includes('login.microsoftonline.com') &&
               !window.location.href.includes('login.live.com'),
-        { timeout: 60000 }
+        { timeout: 120000 }
       ).catch(() => {
         console.error('[auth] Duo timeout — approval may not have completed');
       });
