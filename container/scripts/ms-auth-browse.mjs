@@ -210,8 +210,39 @@ try {
   });
   process.stderr.write('[transcript] button clicked: ' + clicked + '\n');
 
-  // Wait for transcript API response
-  await new Promise(r => setTimeout(r, 8000));
+  // Wait for transcript panel to render
+  await new Promise(r => setTimeout(r, 3000));
+
+  // Handle "Sign In" button inside transcript panel
+  const signInClicked = await page.evaluate(() => {
+    const btns = [...document.querySelectorAll('button, [role="button"], a')];
+    const btn = btns.find(b => /sign in/i.test(b.textContent));
+    if (btn) { btn.click(); return true; }
+    return false;
+  });
+  process.stderr.write('[transcript] sign-in btn clicked: ' + signInClicked + '\n');
+
+  if (signInClicked) {
+    await new Promise(r => setTimeout(r, 10000));
+    process.stderr.write('[transcript] current url after sign-in: ' + page.url() + '\n');
+
+    // If redirected to login, re-apply cookies and navigate back
+    if (page.url().includes('login.microsoftonline.com') || page.url().includes('login.live.com')) {
+      const savedCookiesReauth = await loadSession();
+      if (savedCookiesReauth) {
+        await page.setCookie(...savedCookiesReauth);
+      }
+      await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+      await new Promise(r => setTimeout(r, 15000));
+    } else {
+      // Sign in may have completed in-page, wait for transcript to load
+      await new Promise(r => setTimeout(r, 10000));
+    }
+  } else {
+    // No sign-in needed, wait for transcript API response
+    await new Promise(r => setTimeout(r, 5000));
+  }
+
   page.off('response', transcriptListener);
 
   if (transcriptFromClick) transcriptBody = transcriptFromClick;
