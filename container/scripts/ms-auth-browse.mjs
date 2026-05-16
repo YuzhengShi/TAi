@@ -100,9 +100,10 @@ try {
 
     if (isDuo) {
       const pageText = await page.evaluate(() => document.body?.innerText || '');
-      const codeMatch = pageText.match(/^(\d{3}\s\d{3})$/m);
+      console.error('[auth] Duo page text: ' + pageText.replace(/\n/g, ' | ').slice(0, 300));
+      const codeMatch = pageText.match(/\b(\d{3})\s+(\d{3})\b/);
       if (codeMatch) {
-        console.error(`[auth] Duo verification code: ${codeMatch[0]}`);
+        console.error(`[auth] Duo verification code: ${codeMatch[1]} ${codeMatch[2]}`);
       } else {
         console.error('[auth] Duo MFA detected — waiting for push approval...');
       }
