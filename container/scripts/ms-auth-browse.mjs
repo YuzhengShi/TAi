@@ -188,54 +188,60 @@ try {
     }
   }
 
-  // Wait for transcript to load
-  await new Promise(r => setTimeout(r, 5000));
-
-  // Extract MSAL access token from localStorage and call transcript API directly
-  await new Promise(r => setTimeout(r, 15000));
-
-  const transcriptResult = await page.evaluate(async () => {
-    // Find MSAL access tokens in localStorage
-    const tokens = {};
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      const val = localStorage.getItem(key);
-      if (key.includes('accesstoken') || key.includes('AccessToken') || (key.includes('token') && val && val.includes('"secret"'))) {
-        try {
-          const parsed = JSON.parse(val);
-          if (parsed.secret) tokens[key] = parsed;
-        } catch {}
-      }
-    }
-
-    // Also check for any token with scope containing 'stream' or 'sharepoint'
-    const tokenKeys = Object.keys(tokens);
-    if (tokenKeys.length === 0) return { error: 'no MSAL tokens found', lsKeys: Object.keys(localStorage).filter(k => k.includes('msal') || k.includes('token')).slice(0, 10) };
-
-    // Use first available token
-    const token = tokens[tokenKeys[0]].secret;
-
-    // Get the file ID from the current URL to construct transcript API URL
-    const urlParams = new URLSearchParams(window.location.search);
-    const fileId = urlParams.get('id');
-    if (!fileId) return { error: 'no file id in URL' };
-
-    // Call the stream API to get transcript
-    const apiUrl = `/personal/m_coady_northeastern_edu/_api/v2.1/drives/me/items/${encodeURIComponent(fileId)}/media/transcripts`;
+  // Wait for video player scripts to inject the pre-signed transcript CDN URL
+  if (!transcriptBody) {
     try {
-      const resp = await fetch(apiUrl, {
-        headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' }
-      });
-      const text = await resp.text();
-      return { status: resp.status, body: text.substring(0, 500), tokenFound: true };
-    } catch(e) {
-      return { error: e.message, token: token.substring(0, 30) };
+      await page.waitForFunction(
+        () => [...document.querySelectorAll('script')].some(s => (s.textContent || '').includes('cdnmedia/transcripts')),
+        { timeout: 20000 }
+      );
+    } catch {
+      process.stderr.write('[transcript] no transcript URL appeared in page scripts within 20s\n');
     }
-  });
+  }
 
-  process.stderr.write('[transcript] result: ' + JSON.stringify(transcriptResult).substring(0, 300) + '\n');
+  // Extract pre-signed transcript URL from inline scripts and fetch it
+  if (!transcriptBody) {
+    const transcriptResult = await page.evaluate(async () => {
+      const scripts = [...document.querySelectorAll('script')];
+      let transcriptUrl = null;
+      for (const s of scripts) {
+        const txt = s.textContent || '';
+        const idx = txt.indexOf('cdnmedia/transcripts');
+        if (idx >= 0) {
+          const start = txt.lastIndexOf('https://', idx);
+          const end = txt.indexOf('"', idx + 10);
+          if (start >= 0 && end > start) {
+            transcriptUrl = txt.substring(start, end)
+              .replace(/\\u0026/g, '&')
+              .replace(/\\\//g, '/');
+            break;
+          }
+        }
+      }
+      if (!transcriptUrl) return { error: 'no transcript URL in page scripts' };
+      try {
+        const r = await fetch(transcriptUrl, {
+          headers: { 'Accept': 'application/json', 'Accept-Encoding': 'identity' }
+        });
+        const text = await r.text();
+        return { status: r.status, body: text, url: transcriptUrl.substring(0, 120) };
+      } catch (e) {
+        return { fetchError: e.message, url: transcriptUrl.substring(0, 120) };
+      }
+    });
 
-  if (transcriptResult && transcriptResult.body) transcriptBody = transcriptResult.body;
+    process.stderr.write('[transcript] result: ' + JSON.stringify({
+      status: transcriptResult?.status,
+      error: transcriptResult?.error || transcriptResult?.fetchError,
+      url: transcriptResult?.url,
+      bodyLen: transcriptResult?.body?.length
+    }) + '\n');
+
+    if (transcriptResult?.body && transcriptResult.body.length > 50) {
+      transcriptBody = transcriptResult.body;
+    }
+  }
 
   // Output page info + transcript
   const finalUrl = page.url();
