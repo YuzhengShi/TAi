@@ -4,10 +4,15 @@
  * Usage: node /opt/scripts/ms-auth-browse.mjs <url>
  *
  * Reads MS_EMAIL and MS_PASSWORD from environment.
- * Opens the URL, handles Microsoft login if redirected, then outputs page text.
+ * Persists session cookies to S3 so Duo MFA only needed once.
  */
 import { execSync } from 'child_process';
+import fs from 'fs';
 import puppeteer from 'puppeteer-core';
+
+const S3_BUCKET = 'tai-backups-prod';
+const S3_KEY = 'ms-session.json';
+const LOCAL_SESSION = '/tmp/ms-session.json';
 
 const url = process.argv[2];
 if (!url) {
@@ -22,6 +27,30 @@ if (!email || !password) {
   process.exit(1);
 }
 
+// Try to load saved session from S3
+function loadSession() {
+  try {
+    execSync(`aws s3 cp s3://${S3_BUCKET}/${S3_KEY} ${LOCAL_SESSION} --quiet 2>/dev/null`, { stdio: 'pipe' });
+    const cookies = JSON.parse(fs.readFileSync(LOCAL_SESSION, 'utf-8'));
+    console.error('[auth] Session loaded from S3');
+    return cookies;
+  } catch {
+    console.error('[auth] No session found, fresh login required');
+    return null;
+  }
+}
+
+// Save session to S3 after successful auth
+function saveSession(cookies) {
+  try {
+    fs.writeFileSync(LOCAL_SESSION, JSON.stringify(cookies));
+    execSync(`aws s3 cp ${LOCAL_SESSION} s3://${S3_BUCKET}/${S3_KEY} --quiet`, { stdio: 'pipe' });
+    console.error('[auth] Session saved to S3');
+  } catch (e) {
+    console.error(`[auth] Failed to save session: ${e.message}`);
+  }
+}
+
 const browser = await puppeteer.launch({
   executablePath: '/usr/bin/chromium',
   headless: 'new',
@@ -32,36 +61,43 @@ try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 900 });
 
+  // Load saved cookies before navigating
+  const savedCookies = loadSession();
+  if (savedCookies) {
+    await page.setCookie(...savedCookies);
+  }
+
   await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
 
-  // Check if redirected to Microsoft login
+  // Check if redirected to Microsoft login (session expired or no session)
+  let didAuth = false;
   if (page.url().includes('login.microsoftonline.com') || page.url().includes('login.live.com')) {
+    didAuth = true;
     // Email step
     await page.waitForSelector('input[type="email"], input[name="loginfmt"]', { timeout: 10000 });
     await page.type('input[type="email"], input[name="loginfmt"]', email, { delay: 50 });
     await page.click('input[type="submit"], #idSIButton9');
     await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
 
-    // Password step — use Microsoft's actual field ID, wait for it to be interactive
+    // Password step
     await page.waitForSelector('#i0118, input[name="passwd"]', { timeout: 15000, visible: true });
     await new Promise(r => setTimeout(r, 1000));
     await page.type('#i0118, input[name="passwd"]', password, { delay: 80 });
     await page.click('#idSIButton9');
     await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
 
-    // Duo MFA — push is sent automatically to 1394, just wait for approval
+    // Duo MFA — push is sent automatically, extract code and wait
     await new Promise(r => setTimeout(r, 3000));
     const isDuo = page.url().includes('duosecurity.com') ||
       await page.$('iframe[src*="duosecurity.com"]').then(f => !!f).catch(() => false);
 
     if (isDuo) {
-      // Extract and print the verification code immediately so the agent can relay it
       const pageText = await page.evaluate(() => document.body?.innerText || '');
       const codeMatch = pageText.match(/(\d{2,3}\s?\d{2,3})/);
       if (codeMatch) {
         console.error(`[auth] Duo verification code: ${codeMatch[0]}`);
       } else {
-        console.error('[auth] Duo MFA detected — no code found on page, waiting for push approval...');
+        console.error('[auth] Duo MFA detected — waiting for push approval...');
       }
       console.error('[auth] Waiting up to 120s for approval...');
       await page.waitForFunction(
@@ -88,7 +124,15 @@ try {
     ).catch(() => {});
   }
 
-  // Wait a bit for dynamic content
+  // Save session after successful auth (or refresh existing)
+  if (didAuth || savedCookies) {
+    const cookies = await page.cookies();
+    if (cookies.length > 0 && !page.url().includes('login.microsoftonline.com')) {
+      saveSession(cookies);
+    }
+  }
+
+  // Wait for dynamic content
   await new Promise(r => setTimeout(r, 3000));
 
   // Output page info
