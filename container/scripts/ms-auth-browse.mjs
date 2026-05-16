@@ -68,6 +68,9 @@ try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 900 });
 
+  // Disable compression so transcript response is readable
+  await page.setExtraHTTPHeaders({ 'Accept-Encoding': 'identity' });
+
   // Load saved cookies before navigating
   const savedCookies = await loadSession();
   if (savedCookies) {
@@ -166,11 +169,20 @@ try {
   // Intercept transcript API response
   let transcriptText = '';
   page.on('response', async (response) => {
-    const url = response.url();
-    if (url.includes('transcript') || url.includes('caption') || url.includes('.vtt')) {
+    const u = response.url();
+    if (u.includes('transcripts') && u.includes('cdnmedia')) {
       try {
-        const body = await response.text();
-        if (body.length > 100) transcriptText += body + '\n';
+        const buf = await response.buffer();
+        const text = buf.toString('utf8');
+        if (text.startsWith('{') || text.startsWith('[')) {
+          transcriptText = text;
+        }
+      } catch {}
+    } else if (u.includes('transcript') || u.includes('caption') || u.includes('.vtt')) {
+      try {
+        const buf = await response.buffer();
+        const text = buf.toString('utf8');
+        if (text.length > 100) transcriptText += text + '\n';
       } catch {}
     }
   });
