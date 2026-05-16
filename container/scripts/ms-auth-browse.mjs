@@ -61,7 +61,14 @@ async function saveSession(cookies) {
 const browser = await puppeteer.launch({
   executablePath: '/usr/bin/chromium',
   headless: 'new',
-  args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+  args: [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-gpu',
+    '--disable-dev-shm-usage',
+    '--disable-features=SameSiteByDefaultCookies,CookiesWithoutSameSiteMustBeSecure',
+    '--disable-web-security',
+  ],
 });
 
 try {
@@ -182,10 +189,10 @@ try {
   }
 
   // Wait for transcript to load
-  await new Promise(r => setTimeout(r, 10000));
+  await new Promise(r => setTimeout(r, 5000));
 
   // Extract MSAL access token from localStorage and call transcript API directly
-  await new Promise(r => setTimeout(r, 5000));
+  await new Promise(r => setTimeout(r, 15000));
 
   const transcriptResult = await page.evaluate(async () => {
     // Find MSAL access tokens in localStorage
@@ -193,7 +200,7 @@ try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       const val = localStorage.getItem(key);
-      if (key.includes('accesstoken') || key.includes('AccessToken')) {
+      if (key.includes('accesstoken') || key.includes('AccessToken') || (key.includes('token') && val && val.includes('"secret"'))) {
         try {
           const parsed = JSON.parse(val);
           if (parsed.secret) tokens[key] = parsed;
