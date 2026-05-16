@@ -163,8 +163,21 @@ try {
     }
   }
 
-  // Wait for dynamic content
-  await new Promise(r => setTimeout(r, 3000));
+  // Wait for transcript to load — try clicking "Read transcript" button if present
+  await new Promise(r => setTimeout(r, 5000));
+
+  // Try to click the transcript tab/button to ensure it's open
+  const transcriptBtn = await page.$('[aria-label="Read transcript"], button[data-testid="transcript-button"]').catch(() => null);
+  if (transcriptBtn) {
+    await transcriptBtn.click();
+    await new Promise(r => setTimeout(r, 3000));
+  }
+
+  // Wait for transcript entries to appear (up to 15s)
+  await page.waitForFunction(
+    () => document.body.innerText.includes('0:0') || document.body.innerText.length > 2000,
+    { timeout: 15000 }
+  ).catch(() => {});
 
   // Output page info
   const finalUrl = page.url();
