@@ -163,6 +163,18 @@ try {
     }
   }
 
+  // Intercept transcript API response
+  let transcriptText = '';
+  page.on('response', async (response) => {
+    const url = response.url();
+    if (url.includes('transcript') || url.includes('caption') || url.includes('.vtt')) {
+      try {
+        const body = await response.text();
+        if (body.length > 100) transcriptText += body + '\n';
+      } catch {}
+    }
+  });
+
   // Wait for transcript to load — try clicking "Read transcript" button if present
   await new Promise(r => setTimeout(r, 5000));
 
@@ -173,11 +185,8 @@ try {
     await new Promise(r => setTimeout(r, 3000));
   }
 
-  // Wait for transcript entries to appear (up to 15s)
-  await page.waitForFunction(
-    () => document.body.innerText.includes('0:0') || document.body.innerText.length > 2000,
-    { timeout: 15000 }
-  ).catch(() => {});
+  // Wait for transcript network requests to complete
+  await new Promise(r => setTimeout(r, 10000));
 
   // Output page info
   const finalUrl = page.url();
@@ -187,6 +196,10 @@ try {
   console.log(`URL: ${finalUrl}`);
   console.log(`Title: ${title}`);
   console.log('---');
+  if (transcriptText) {
+    console.log('TRANSCRIPT:\n' + transcriptText.slice(0, 50000));
+    console.log('---');
+  }
   console.log(text.slice(0, 50000));
 } finally {
   await browser.close();
