@@ -17,6 +17,7 @@ import {
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  STORE_DIR,
   TIMEZONE,
 } from './config.js';
 import { readEnvFile } from './env.js';
@@ -85,7 +86,7 @@ function buildVolumeMounts(
     // Docker preserves symlinks inside bind mounts but their targets don't
     // exist in the container. Mount the resolved targets at the same absolute
     // path so the symlinks resolve naturally inside the container.
-    for (const [name, hostDir] of [['groups', GROUPS_DIR], ['data', DATA_DIR]] as const) {
+    for (const [name, hostDir] of [['groups', GROUPS_DIR], ['data', DATA_DIR], ['store', STORE_DIR]] as const) {
       try {
         const resolved = fs.realpathSync(hostDir);
         if (resolved !== path.resolve(projectRoot, name)) {
