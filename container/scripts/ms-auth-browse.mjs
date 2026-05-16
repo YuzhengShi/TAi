@@ -119,9 +119,22 @@ try {
             !currentUrl.includes('login.microsoftonline.com')) {
           console.error('[auth] Duo approved — continuing');
         } else {
-          console.error('[auth] Duo timeout — approval may not have completed');
+          // May still be on Duo "Is this your device?" page — try clicking through
+          console.error('[auth] Duo timeout — checking for device trust prompt...');
         }
       });
+
+      // Handle "Is this your device?" trust prompt (still on duosecurity.com)
+      const trustBtn = await page.$('button::-p-text("Yes, this is my device")').catch(() => null) ||
+        await page.evaluateHandle(() => {
+          const btns = [...document.querySelectorAll('button')];
+          return btns.find(b => b.textContent.includes('Yes')) || null;
+        }).then(h => h.asElement()).catch(() => null);
+      if (trustBtn) {
+        await trustBtn.click();
+        console.error('[auth] Clicked "Yes, this is my device"');
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
+      }
     }
 
     // "Stay signed in?" prompt
