@@ -100,7 +100,7 @@ try {
 
     if (isDuo) {
       const pageText = await page.evaluate(() => document.body?.innerText || '');
-      const codeMatch = pageText.match(/(\d{2,3}\s?\d{2,3})/);
+      const codeMatch = pageText.match(/^(\d{3}\s\d{3})$/m);
       if (codeMatch) {
         console.error(`[auth] Duo verification code: ${codeMatch[0]}`);
       } else {
