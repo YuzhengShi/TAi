@@ -56,14 +56,11 @@ agent-browser text        # extract readable text
 Rules: READ-ONLY. Never click submit/post/edit/delete. Only read and summarize. Check `/workspace/global/COURSE_STATUS.md` first — the sync task may have already summarized the link.
 
 ### Microsoft SharePoint/OneDrive Authentication
-When accessing SharePoint or OneDrive URLs (`*.sharepoint.com`, `onedrive.live.com`), the browser will redirect to `login.microsoftonline.com`. Authenticate automatically:
-1. Read credentials: run `echo $MS_EMAIL` and `echo $MS_PASSWORD` in Bash (available as env vars)
-2. On the email page: type the email value into the email/username field, click Next
-3. On the password page: type the password value into the password field, click "Sign in"
-4. If "Stay signed in?" appears, click "Yes"
-5. Wait for redirect back to SharePoint content, then continue browsing
-
-Never log, display, or include credentials in responses. If MFA is required and cannot be completed, skip the page.
+When you need to access SharePoint or OneDrive URLs (`*.sharepoint.com`, `onedrive.live.com`), use the auth script instead of `agent-browser`:
+```bash
+node /opt/scripts/ms-auth-browse.mjs "https://the-sharepoint-url.sharepoint.com/..."
+```
+This handles Microsoft login automatically using `MS_EMAIL`/`MS_PASSWORD` from environment and outputs the page text. Never log or display the credentials themselves.
 
 ### YouTube Videos (`youtube_info` + `youtube_transcript`)
 When you encounter a YouTube link (from Canvas, announcements, or students):
