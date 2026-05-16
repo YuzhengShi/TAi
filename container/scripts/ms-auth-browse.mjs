@@ -138,10 +138,14 @@ try {
     ).catch(() => {});
   }
 
-  // Save session after successful auth (or refresh existing)
-  if (didAuth || savedCookies) {
+  // Save session only when actually on SharePoint/target content (not login/Duo pages)
+  const currentUrl = page.url();
+  const onContent = !currentUrl.includes('login.microsoftonline.com') &&
+    !currentUrl.includes('login.live.com') &&
+    !currentUrl.includes('duosecurity.com');
+  if (onContent) {
     const cookies = await page.cookies();
-    if (cookies.length > 0 && !page.url().includes('login.microsoftonline.com')) {
+    if (cookies.length > 0) {
       await saveSession(cookies);
     }
   }
