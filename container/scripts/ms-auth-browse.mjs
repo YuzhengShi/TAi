@@ -49,6 +49,42 @@ try {
     await page.click('#idSIButton9');
     await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
 
+    // Duo MFA handling — detect iframe or Duo prompt, click "Call Me"
+    const duoDetected = await page.waitForSelector(
+      'iframe[id="duo_iframe"], #duo_iframe, [data-testid="callPhoneBtn"], button:has-text("Call"), .call-phone-btn',
+      { timeout: 5000 }
+    ).catch(() => null);
+
+    if (duoDetected) {
+      console.error('[auth] Duo MFA detected, attempting phone call...');
+      // Try to find Duo iframe and switch into it
+      const duoFrame = page.frames().find(f => f.url().includes('duosecurity.com') || f.url().includes('duo.com'));
+      const ctx = duoFrame || page;
+
+      // Look for "Call Me" or phone option and click it
+      const callBtn = await ctx.waitForSelector(
+        'button[data-testid="call-phone-btn"], button.call-phone-btn, [data-testid="phone-cta"], button:nth-of-type(1)',
+        { timeout: 10000, visible: true }
+      ).catch(() => null);
+
+      if (callBtn) {
+        await callBtn.click();
+        console.error('[auth] Clicked call button, waiting up to 60s for approval...');
+      } else {
+        console.error('[auth] No call button found, waiting 60s for manual Duo approval...');
+      }
+
+      // Wait up to 60s for Duo to complete and redirect away
+      await page.waitForFunction(
+        () => !window.location.href.includes('duosecurity.com') &&
+              !window.location.href.includes('login.microsoftonline.com') &&
+              !window.location.href.includes('login.live.com'),
+        { timeout: 60000 }
+      ).catch(() => {
+        console.error('[auth] Duo timeout — approval may not have completed');
+      });
+    }
+
     // "Stay signed in?" prompt
     const staySignedIn = await page.$('#idSIButton9, input[value="Yes"]');
     if (staySignedIn) {
@@ -59,7 +95,7 @@ try {
     // Wait for final redirect to SharePoint
     await page.waitForFunction(
       () => !window.location.href.includes('login.microsoftonline.com') && !window.location.href.includes('login.live.com'),
-      { timeout: 20000 }
+      { timeout: 15000 }
     ).catch(() => {});
   }
 
