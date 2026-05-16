@@ -49,55 +49,13 @@ try {
     await page.click('#idSIButton9');
     await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
 
-    // Duo MFA handling — detect Duo v4 prompt page
+    // Duo MFA — push is sent automatically to 1394, just wait for approval
     await new Promise(r => setTimeout(r, 3000));
     const isDuo = page.url().includes('duosecurity.com') ||
       await page.$('iframe[src*="duosecurity.com"]').then(f => !!f).catch(() => false);
 
     if (isDuo) {
-      console.error('[auth] Duo MFA detected, looking for phone call option...');
-
-      // Duo v4 may be in an iframe or the main page
-      const duoFrame = page.frames().find(f => f.url().includes('duosecurity.com'));
-      const ctx = duoFrame || page;
-
-      // Step 1: Click "Other options" to expand alternatives
-      const otherOpts = await ctx.waitForSelector(
-        'a::-p-text("Other options"), button::-p-text("Other options"), [data-testid="other-options-link"]',
-        { timeout: 8000, visible: true }
-      ).catch(() => null);
-
-      if (otherOpts) {
-        await otherOpts.click();
-        console.error('[auth] Clicked "Other options"');
-        await new Promise(r => setTimeout(r, 2000));
-      }
-
-      // Step 2: Find and click the phone call option (number ending in 1394)
-      const callOption = await ctx.evaluateHandle(() => {
-        const els = [...document.querySelectorAll('button, a, div[role="button"], [data-testid]')];
-        return els.find(el => {
-          const text = el.textContent || '';
-          return (text.includes('1394') || text.toLowerCase().includes('call')) &&
-                 (text.toLowerCase().includes('phone') || text.toLowerCase().includes('call'));
-        }) || null;
-      });
-
-      if (callOption && callOption.asElement()) {
-        await callOption.asElement().click();
-        console.error('[auth] Clicked phone call option (1394), waiting up to 60s...');
-      } else {
-        // Fallback: click any "Call" button visible
-        const fallbackCall = await ctx.$('button::-p-text("Call")').catch(() => null);
-        if (fallbackCall) {
-          await fallbackCall.click();
-          console.error('[auth] Clicked fallback "Call" button, waiting up to 60s...');
-        } else {
-          console.error('[auth] No call option found, waiting 60s for manual approval...');
-        }
-      }
-
-      // Wait up to 60s for Duo to complete and redirect away
+      console.error('[auth] Duo MFA detected — push sent automatically, waiting up to 60s for approval...');
       await page.waitForFunction(
         () => !window.location.href.includes('duosecurity.com') &&
               !window.location.href.includes('login.microsoftonline.com') &&
