@@ -71,6 +71,21 @@ try {
   // Disable compression so transcript response is readable
   await page.setExtraHTTPHeaders({ 'Accept-Encoding': 'identity' });
 
+  // Intercept transcript API responses (must be before goto)
+  let transcriptBody = '';
+  page.on('response', async (response) => {
+    const u = response.url();
+    if (u.includes('transcripts') && u.includes('cdnmedia')) {
+      try {
+        const buf = await response.buffer();
+        const text = buf.toString('utf8');
+        if (text.startsWith('{') || text.startsWith('[')) {
+          transcriptBody = text;
+        }
+      } catch {}
+    }
+  });
+
   // Load saved cookies before navigating
   const savedCookies = await loadSession();
   if (savedCookies) {
@@ -166,41 +181,10 @@ try {
     }
   }
 
-  // Intercept transcript API response
-  let transcriptText = '';
-  page.on('response', async (response) => {
-    const u = response.url();
-    if (u.includes('transcripts') && u.includes('cdnmedia')) {
-      try {
-        const buf = await response.buffer();
-        const text = buf.toString('utf8');
-        if (text.startsWith('{') || text.startsWith('[')) {
-          transcriptText = text;
-        }
-      } catch {}
-    } else if (u.includes('transcript') || u.includes('caption') || u.includes('.vtt')) {
-      try {
-        const buf = await response.buffer();
-        const text = buf.toString('utf8');
-        if (text.length > 100) transcriptText += text + '\n';
-      } catch {}
-    }
-  });
-
-  // Wait for transcript to load — try clicking "Read transcript" button if present
-  await new Promise(r => setTimeout(r, 5000));
-
-  // Try to click the transcript tab/button to ensure it's open
-  const transcriptBtn = await page.$('[aria-label="Read transcript"], button[data-testid="transcript-button"]').catch(() => null);
-  if (transcriptBtn) {
-    await transcriptBtn.click();
-    await new Promise(r => setTimeout(r, 3000));
-  }
-
-  // Wait for transcript network requests to complete
+  // Wait for transcript to load
   await new Promise(r => setTimeout(r, 10000));
 
-  // Output page info
+  // Output page info + transcript
   const finalUrl = page.url();
   const title = await page.title();
   const text = await page.evaluate(() => document.body?.innerText || '');
@@ -208,11 +192,10 @@ try {
   console.log(`URL: ${finalUrl}`);
   console.log(`Title: ${title}`);
   console.log('---');
-  if (transcriptText) {
-    console.log('TRANSCRIPT:\n' + transcriptText.slice(0, 50000));
-    console.log('---');
-  }
   console.log(text.slice(0, 50000));
+  if (transcriptBody) {
+    console.log('\nTRANSCRIPT_JSON:\n' + transcriptBody.slice(0, 50000));
+  }
 } finally {
   await browser.close();
 }
