@@ -78,20 +78,7 @@ try {
   // Disable compression so transcript response is readable
   await page.setExtraHTTPHeaders({ 'Accept-Encoding': 'identity' });
 
-  // Intercept transcript API responses (must be before goto)
   let transcriptBody = '';
-  page.on('response', async (response) => {
-    const u = response.url();
-    if (u.includes('transcripts') && u.includes('cdnmedia')) {
-      try {
-        const buf = await response.buffer();
-        const text = buf.toString('utf8');
-        if (text.startsWith('{') || text.startsWith('[')) {
-          transcriptBody = text;
-        }
-      } catch {}
-    }
-  });
 
   // Load saved cookies before navigating
   const savedCookies = await loadSession();
@@ -222,64 +209,67 @@ try {
     }
   }
 
-  // Wait for video player scripts to inject the pre-signed transcript CDN URL
-  if (!transcriptBody) {
+  // Use CDP to capture the bearer token the Stream app uses for media requests
+  const client = await page.createCDPSession();
+  await client.send('Network.enable');
+  let bearerToken = null;
+  client.on('Network.requestWillBeSent', (p) => {
+    if (p.request.url.includes('cdnmedia') && !bearerToken) {
+      bearerToken = p.request.headers['x-authorization'] || p.request.headers['Authorization'];
+    }
+  });
+
+  // Wait for the Stream app to boot and fire its media requests
+  await new Promise(r => setTimeout(r, 15000));
+
+  if (bearerToken && !transcriptBody) {
     try {
-      await page.waitForFunction(
-        () => [...document.querySelectorAll('script')].some(s => (s.textContent || '').includes('cdnmedia/transcripts')),
-        { timeout: 20000 }
-      );
-    } catch {
-      process.stderr.write('[transcript] no transcript URL appeared in page scripts within 20s\n');
-    }
-  }
+      // Extract drive/item IDs from the page HTML
+      const pageHtml = await page.content();
+      const driveMatch = pageHtml.match(/drives\/(b![a-zA-Z0-9_-]{40,})/);
+      const itemMatch = pageHtml.match(/items\/([A-Z0-9]{30,})/);
+      if (driveMatch && itemMatch) {
+        const driveId = driveMatch[1];
+        const itemId = itemMatch[1];
+        const baseUrl = page.url().split('/_layouts')[0];
+        const siteBase = new URL(baseUrl).origin + '/personal/m_coady_northeastern_edu';
+        const hdrs = {
+          'Authorization': bearerToken,
+          'Accept': 'application/json',
+          'Accept-Encoding': 'identity',
+        };
 
-  // Extract pre-signed transcript URL from inline scripts and fetch it
-  if (!transcriptBody) {
-    const transcriptResult = await page.evaluate(async () => {
-      const scripts = [...document.querySelectorAll('script')];
-      let transcriptUrl = null;
-      for (const s of scripts) {
-        const txt = s.textContent || '';
-        const idx = txt.indexOf('cdnmedia/transcripts');
-        if (idx >= 0) {
-          const start = txt.lastIndexOf('https://', idx);
-          // Find unescaped closing quote (not preceded by backslash)
-          let end = idx + 20;
-          while (end < txt.length) {
-            if (txt[end] === '"' && txt[end - 1] !== '\\') break;
-            end++;
+        // Get transcript list
+        const listResp = await fetch(`${siteBase}/_api/v2.1/drives/${driveId}/items/${itemId}/media/transcripts`, { headers: hdrs });
+        if (listResp.ok) {
+          const listJson = await listResp.json();
+          const transcripts = listJson.value || [];
+          process.stderr.write(`[transcript] found ${transcripts.length} transcript(s)\n`);
+          // Get first/default transcript content
+          const defaultTranscript = transcripts.find(t => t.isDefault) || transcripts[0];
+          if (defaultTranscript) {
+            const contentResp = await fetch(
+              `${siteBase}/_api/v2.1/drives/${driveId}/items/${itemId}/media/transcripts/${defaultTranscript.id}/content`,
+              { headers: { ...hdrs, 'Accept': 'text/vtt, */*' } }
+            );
+            if (contentResp.ok) {
+              transcriptBody = await contentResp.text();
+              process.stderr.write(`[transcript] fetched VTT len=${transcriptBody.length}\n`);
+            } else {
+              process.stderr.write(`[transcript] content fetch failed: ${contentResp.status}\n`);
+            }
           }
-          if (start >= 0 && end > start) {
-            transcriptUrl = txt.substring(start, end)
-              .replace(/\\u0026/g, '&')
-              .replace(/\\\//g, '/');
-            break;
-          }
+        } else {
+          process.stderr.write(`[transcript] list failed: ${listResp.status}\n`);
         }
+      } else {
+        process.stderr.write('[transcript] could not extract drive/item IDs from page\n');
       }
-      if (!transcriptUrl) return { error: 'no transcript URL in page scripts' };
-      try {
-        const r = await fetch(transcriptUrl, {
-          headers: { 'Accept': 'application/json', 'Accept-Encoding': 'identity' }
-        });
-        const text = await r.text();
-        return { status: r.status, body: text, url: transcriptUrl.substring(0, 120) };
-      } catch (e) {
-        return { fetchError: e.message, url: transcriptUrl.substring(0, 120) };
-      }
-    });
-
-    process.stderr.write('[transcript] result: ' + JSON.stringify({
-      status: transcriptResult?.status,
-      error: transcriptResult?.error || transcriptResult?.fetchError,
-      url: transcriptResult?.url,
-      bodyLen: transcriptResult?.body?.length
-    }) + '\n');
-
-    if (transcriptResult?.body && transcriptResult.body.length > 50) {
-      transcriptBody = transcriptResult.body;
+    } catch(e) {
+      process.stderr.write(`[transcript] error: ${e.message}\n`);
     }
+  } else if (!bearerToken) {
+    process.stderr.write('[transcript] no bearer token captured\n');
   }
 
   // Output page info + transcript
@@ -292,7 +282,7 @@ try {
   console.log('---');
   console.log(text.slice(0, 50000));
   if (transcriptBody) {
-    console.log('\nTRANSCRIPT_JSON:\n' + transcriptBody.slice(0, 50000));
+    console.log('\nTRANSCRIPT_VTT:\n' + transcriptBody.slice(0, 100000));
   }
 } finally {
   await browser.close();
