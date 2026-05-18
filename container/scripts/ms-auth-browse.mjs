@@ -86,6 +86,16 @@ try {
     await page.setCookie(...savedCookies);
   }
 
+  // Use CDP to capture the bearer token the Stream app uses for media requests
+  const client = await page.createCDPSession();
+  await client.send('Network.enable');
+  let bearerToken = null;
+  client.on('Network.requestWillBeSent', (p) => {
+    if (p.request.url.includes('cdnmedia') && !bearerToken) {
+      bearerToken = p.request.headers['x-authorization'] || p.request.headers['Authorization'];
+    }
+  });
+
   await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
 
   // Check if redirected to Microsoft login (session expired or no session)
@@ -209,17 +219,7 @@ try {
     }
   }
 
-  // Use CDP to capture the bearer token the Stream app uses for media requests
-  const client = await page.createCDPSession();
-  await client.send('Network.enable');
-  let bearerToken = null;
-  client.on('Network.requestWillBeSent', (p) => {
-    if (p.request.url.includes('cdnmedia') && !bearerToken) {
-      bearerToken = p.request.headers['x-authorization'] || p.request.headers['Authorization'];
-    }
-  });
-
-  // Wait for the Stream app to boot and fire its media requests
+  // Wait for Stream app to fire its media requests (bearer token captured by CDP listener above)
   await new Promise(r => setTimeout(r, 15000));
 
   if (bearerToken && !transcriptBody) {
