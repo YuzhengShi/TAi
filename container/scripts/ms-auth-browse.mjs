@@ -244,7 +244,12 @@ try {
         const idx = txt.indexOf('cdnmedia/transcripts');
         if (idx >= 0) {
           const start = txt.lastIndexOf('https://', idx);
-          const end = txt.indexOf('"', idx + 10);
+          // Find unescaped closing quote (not preceded by backslash)
+          let end = idx + 20;
+          while (end < txt.length) {
+            if (txt[end] === '"' && txt[end - 1] !== '\\') break;
+            end++;
+          }
           if (start >= 0 && end > start) {
             transcriptUrl = txt.substring(start, end)
               .replace(/\\u0026/g, '&')
