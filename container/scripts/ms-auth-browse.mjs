@@ -149,6 +149,31 @@ try {
         }
       });
 
+      // Check "Remember me for 30 days" checkbox before device trust
+      const rememberChecked = await page.evaluate(() => {
+        // Try common Duo "remember me" selectors
+        const checkbox = document.querySelector('input[name="dampen_choice"]') ||
+          document.querySelector('input[name="remember_me"]') ||
+          document.querySelector('#remember-me-checkbox') ||
+          document.querySelector('input[type="checkbox"]');
+        if (checkbox && !checkbox.checked) {
+          checkbox.click();
+          return 'clicked';
+        }
+        if (checkbox && checkbox.checked) return 'already-checked';
+        // Try label-based click (newer Duo UI uses custom checkboxes)
+        const labels = [...document.querySelectorAll('label, span, div')];
+        const rememberLabel = labels.find(el =>
+          (el.textContent || '').toLowerCase().includes('remember') ||
+          (el.textContent || '').toLowerCase().includes('30 day'));
+        if (rememberLabel) {
+          rememberLabel.click();
+          return 'clicked-label';
+        }
+        return 'not-found';
+      });
+      console.error(`[auth] Remember me checkbox: ${rememberChecked}`);
+
       // Handle "Is this your device?" trust prompt (still on duosecurity.com)
       const trustBtn = await page.$('button::-p-text("Yes, this is my device")').catch(() => null) ||
         await page.evaluateHandle(() => {
@@ -162,10 +187,19 @@ try {
       }
     }
 
-    // "Stay signed in?" prompt
+    // "Stay signed in?" prompt — check "Don't show this again" first
+    const dontShowAgain = await page.$('#KmsiCheckboxField, input[name="DontShowAgain"]');
+    if (dontShowAgain) {
+      const isChecked = await dontShowAgain.evaluate(el => el.checked);
+      if (!isChecked) {
+        await dontShowAgain.click();
+        console.error('[auth] Checked "Don\'t show this again"');
+      }
+    }
     const staySignedIn = await page.$('#idSIButton9, input[value="Yes"]');
     if (staySignedIn) {
       await staySignedIn.click();
+      console.error('[auth] Clicked "Stay signed in"');
       await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
     }
 
