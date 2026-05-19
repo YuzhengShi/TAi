@@ -77,6 +77,7 @@ def fetch_via_ytdlp(video_id: str, lang: str, cookies_path: str) -> dict | None:
             "--skip-download",
             "--no-warnings",
             "--no-check-formats",
+            "--js-runtimes", "node:/usr/local/bin/node",
             "-o", f"{tmpdir}/%(id)s.%(ext)s",
             url,
         ]
