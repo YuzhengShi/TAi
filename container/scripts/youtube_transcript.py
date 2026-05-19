@@ -71,28 +71,39 @@ def fetch_via_ytdlp(video_id: str, lang: str, cookies_path: str) -> dict | None:
             "yt-dlp",
             "--cookies", cookies_path,
             "--write-auto-sub",
+            "--write-subs",
             "--sub-lang", lang,
-            "--sub-format", "vtt",
+            "--sub-format", "vtt/best",
             "--skip-download",
             "--no-warnings",
+            "--no-check-formats",
             "-o", f"{tmpdir}/%(id)s.%(ext)s",
             url,
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if result.returncode != 0:
+        # yt-dlp may return non-zero but still write subtitle files
+        # (e.g., format errors unrelated to subtitles)
+
+        # Find the VTT/SRT file
+        sub_files = list(Path(tmpdir).glob(f"*.{lang}.vtt"))
+        if not sub_files:
+            sub_files = list(Path(tmpdir).glob("*.vtt"))
+        if not sub_files:
+            sub_files = list(Path(tmpdir).glob(f"*.{lang}.*"))
+        if not sub_files:
+            sub_files = list(Path(tmpdir).glob("*.srt")) + list(Path(tmpdir).glob("*.json3"))
+        if not sub_files:
             return None
 
-        # Find the VTT file
-        vtt_files = list(Path(tmpdir).glob(f"*.{lang}.vtt"))
-        if not vtt_files:
-            # Try auto-generated subtitle variant
-            vtt_files = list(Path(tmpdir).glob("*.vtt"))
-        if not vtt_files:
-            return None
-
-        vtt_content = vtt_files[0].read_text(encoding="utf-8")
-        return parse_vtt(vtt_content, video_id)
+        content = sub_files[0].read_text(encoding="utf-8")
+        if sub_files[0].suffix == ".vtt":
+            return parse_vtt(content, video_id)
+        elif sub_files[0].suffix == ".srt":
+            return parse_vtt(content, video_id)  # SRT is close enough to VTT
+        elif sub_files[0].suffix == ".json3":
+            return parse_json3(content, video_id)
+        return None
 
 
 def parse_vtt(vtt: str, video_id: str) -> dict:
@@ -150,6 +161,32 @@ def parse_vtt(vtt: str, video_id: str) -> dict:
         "total_chars": len(full_text),
         "segment_count": len(deduped),
         "segments": deduped,
+        "full_text": full_text,
+    }
+
+
+def parse_json3(content: str, video_id: str) -> dict:
+    """Parse YouTube json3 subtitle format."""
+    data = json.loads(content)
+    events = data.get("events", [])
+    segments = []
+    for event in events:
+        segs = event.get("segs", [])
+        text = "".join(s.get("utf8", "") for s in segs).strip()
+        if text and text != "\n":
+            start = event.get("tStartMs", 0) / 1000
+            segments.append({"start": start, "text": text})
+
+    full_text = " ".join(seg["text"] for seg in segments)
+    duration = segments[-1]["start"] if segments else 0
+
+    return {
+        "video_id": video_id,
+        "language": "en",
+        "duration_seconds": round(duration),
+        "total_chars": len(full_text),
+        "segment_count": len(segments),
+        "segments": segments,
         "full_text": full_text,
     }
 
