@@ -19,6 +19,7 @@ import {
   GetTranscriptionJobCommand,
   CreateVocabularyCommand,
   GetVocabularyCommand,
+  DeleteVocabularyCommand,
 } from '@aws-sdk/client-transcribe';
 
 const S3_BUCKET = 'tai-backups-prod';
@@ -30,15 +31,16 @@ const TEMP_DIR = '/workspace/extra/tmp-transcribe';
 const REGION = process.env.AWS_REGION || 'us-west-2';
 
 const VOCABULARY_NAME = 'tai-cs6650';
+// Transcribe Phrases: each entry is a single word or hyphenated pronunciation hint.
+// Multi-word terms use hyphens as pronunciation separators.
 const CUSTOM_VOCABULARY = [
-  'CS6650', 'Piazza', 'Yvonne', 'Coady', 'Northeastern',
+  'CS-six-six-fifty', 'Piazza', 'Yvonne', 'Coady', 'Northeastern',
   'Paxos', 'Raft', 'MapReduce', 'Zookeeper', 'etcd', 'Kafka', 'Cassandra',
-  'DynamoDB', 'MongoDB', 'Redis', 'CAP', 'ACID',
+  'DynamoDB', 'MongoDB', 'Redis',
   'goroutine', 'goroutines', 'Golang', 'Gin', 'mutex', 'WaitGroup',
-  'Terraform', 'Docker', 'Kubernetes', 'EC2', 'ECS', 'Lambda', 'AWS', 'GCP',
-  'gRPC', 'REST', 'HTTP', 'HTTPS', 'JSON', 'API',
-  'linearizability', 'quorum', 'sharding', 'partitioning', 'replication',
-  'consistent-hashing', 'two-phase-commit', 'microservices',
+  'Terraform', 'Docker', 'Kubernetes',
+  'gRPC', 'linearizability', 'quorum', 'sharding', 'partitioning',
+  'microservices', 'Locust',
 ];
 
 const s3 = new S3Client({ region: REGION });
@@ -236,6 +238,11 @@ async function ensureVocabulary() {
       await waitForVocabulary();
       return;
     }
+    if (resp.VocabularyState === 'FAILED') {
+      process.stderr.write('[vocab] previous vocab failed, deleting and recreating...\n');
+      await transcribe.send(new DeleteVocabularyCommand({ VocabularyName: VOCABULARY_NAME }));
+      await new Promise(r => setTimeout(r, 2000));
+    }
   } catch (e) {
     if (!e.name?.includes('NotFound') && !e.message?.includes('not found') && !e.name?.includes('BadRequestException')) throw e;
   }
@@ -254,7 +261,10 @@ async function waitForVocabulary() {
     await new Promise(r => setTimeout(r, 5000));
     const resp = await transcribe.send(new GetVocabularyCommand({ VocabularyName: VOCABULARY_NAME }));
     if (resp.VocabularyState === 'READY') return;
-    if (resp.VocabularyState === 'FAILED') throw new Error('vocabulary creation failed');
+    if (resp.VocabularyState === 'FAILED') {
+      process.stderr.write('[vocab] failure reason: ' + (resp.FailureReason || 'unknown') + '\n');
+      throw new Error('vocabulary creation failed: ' + (resp.FailureReason || 'unknown'));
+    }
   }
   throw new Error('vocabulary timeout');
 }
