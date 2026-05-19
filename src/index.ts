@@ -230,6 +230,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
   let emptyOutputRetried = false;
+  // Track whether any output was produced after messages were piped.
+  // If the container exits without responding to piped messages, we must
+  // NOT advance the cursor — those messages need re-processing.
+  let outputAfterPipe = false;
   const sendMessageFlagPath = path.join(DATA_DIR, 'ipc', group.folder, 'messages', '.send_message_used');
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
@@ -278,6 +282,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       // Mark as sent even if text was stripped (all <internal>) to prevent
       // cursor rollback that would cause duplicate messages on error.
       outputSentToUser = true;
+      // Track that output was produced after piped messages (so cursor can advance)
+      if (pipedUpTo[chatJid] && pipedUpTo[chatJid] > (lastAgentTimestamp[chatJid] || '')) {
+        outputAfterPipe = true;
+      }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
     }
@@ -310,12 +318,19 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   }
 
   // Advance cursor past messages piped to this container via sendMessage.
-  // Only done after successful completion — if the container crashed,
-  // the error paths above leave the cursor unchanged so piped messages
-  // get re-discovered by the next container.
+  // Only advance if the agent actually responded to the piped messages.
+  // If the container timed out without producing output for piped messages,
+  // leave the cursor so those messages get re-processed by the next container.
   if (pipedUpTo[chatJid] && pipedUpTo[chatJid] > (lastAgentTimestamp[chatJid] || '')) {
-    lastAgentTimestamp[chatJid] = pipedUpTo[chatJid];
-    saveState();
+    if (outputAfterPipe) {
+      lastAgentTimestamp[chatJid] = pipedUpTo[chatJid];
+      saveState();
+    } else {
+      logger.warn(
+        { group: group.name, pipedUpTo: pipedUpTo[chatJid] },
+        'Piped messages got no response — leaving cursor for re-processing',
+      );
+    }
   }
   delete pipedUpTo[chatJid];
 
