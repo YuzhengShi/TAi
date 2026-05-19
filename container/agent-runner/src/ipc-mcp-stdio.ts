@@ -745,7 +745,7 @@ For just metadata (title, description, tags), use youtube_info instead.`,
       const result = execSync('/opt/leanrag/bin/python3 /opt/scripts/youtube_transcript.py', {
         input,
         maxBuffer: 10 * 1024 * 1024,
-        timeout: 30000,
+        timeout: 90000,
         env: process.env,
       });
       return { content: [{ type: 'text' as const, text: result.toString() }] };
