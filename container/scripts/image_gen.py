@@ -1,4 +1,4 @@
-"""Amazon Nova Canvas -- reads prompt from stdin, writes PNG to stdout."""
+"""Stability Stable Image Core -- reads prompt from stdin, writes PNG to stdout."""
 import boto3
 import json
 import base64
@@ -9,23 +9,18 @@ prompt = sys.stdin.read().strip()
 if not prompt:
     print("Error: no prompt provided", file=sys.stderr)
     sys.exit(1)
-if len(prompt) > 1024:
-    prompt = prompt[:1024]  # Nova Canvas limit
+if len(prompt) > 10000:
+    prompt = prompt[:10000]
 
-model_id = 'amazon.nova-canvas-v1:0'  # 不加 us. 前缀
-region = 'us-east-1'  # Nova Canvas 仅 us-east-1 可用
+model_id = 'stability.stable-image-core-v1:1'
+region = os.environ.get('AWS_REGION', 'us-west-2')
 
 try:
     client = boto3.client('bedrock-runtime', region_name=region)
     body = json.dumps({
-        "taskType": "TEXT_IMAGE",
-        "textToImageParams": {"text": prompt},
-        "imageGenerationConfig": {
-            "numberOfImages": 1,
-            "width": 1024,
-            "height": 1024,
-            "cfgScale": 8.0,
-        }
+        "prompt": prompt,
+        "output_format": "png",
+        "aspect_ratio": "1:1",
     })
     resp = client.invoke_model(modelId=model_id, body=body)
     result = json.loads(resp["body"].read())
