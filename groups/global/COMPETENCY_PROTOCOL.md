@@ -92,9 +92,18 @@ Track each misconception through these states:
 
 ## Strategy Logging
 
-**MANDATORY**: After every substantive teaching interaction, log the strategy used in the *Teaching Strategy Log* section of COMPETENCY.md:
-- Date, strategy (EXPLAIN/SOCRATIC/SCAFFOLD/DEMONSTRATE/CORRECT/CHALLENGE/MOCK_PRACTICE), topic, outcome (effective/ineffective/unclear), notes
-- Example: `2026-03-19: SOCRATIC on Raft leader election — effective, student reasoned through split-brain scenario`
+**MANDATORY**: After every substantive teaching interaction, log the strategy used in `competency/strategy-log.md`:
+- Date, strategy, topic, confidence before→after (delta), engagement signal, outcome (effective/ineffective/unclear), notes
+- Include the confidence measurement — this is how TAi learns which strategies produce results
+
+Format: `DATE: STRATEGY on TOPIC | conf_before→conf_after (delta) | engagement | outcome | notes`
+
+Examples:
+- `2026-03-19: SOCRATIC on Raft leader election | 0.4→0.55 (+0.15) | long engaged answers | effective | student reasoned through split-brain scenario unprompted`
+- `2026-03-19: SOCRATIC on Docker networking | 0.2→0.2 (0) | "idk", short answers | ineffective | frustration after 2 rounds, switched to EXPLAIN mid-conversation`
+- `2026-03-20: ANALOGIZE on consistent hashing | 0.1→0.3 (+0.2) | student asked follow-up questions | effective | hash ring = numbered clock analogy clicked immediately`
+
+**After logging, check for patterns and update COMPETENCY.md "Effective Approaches" section** — see TEACHING_STRATEGIES.md "Strategy Effectiveness Analysis" for the full self-improvement protocol.
 
 ## Proactive Decision Logging
 

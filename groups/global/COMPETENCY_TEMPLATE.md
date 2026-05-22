@@ -8,10 +8,33 @@ Last updated: [auto-updated by TAi after each interaction]
 - GitHub: [username]
 - Learning style: [discovered over time: analogies / code examples / problem-first / visual diagrams]
 - Communication style: [concise / detailed / casual / formal]
-- Best teaching strategies: [what has worked, what hasn't — updated from strategy-log.md patterns]
 - Engagement pattern: [morning / evening / sporadic / consistent]
 - Current week: [current course week]
 - Canvas record: [brief summary of submitted work and performance]
+
+## Effective Approaches (Self-Improving)
+
+What works and doesn't work for THIS student, learned from experience. TAi reads this BEFORE the default strategy matrix.
+
+### Approaches That Work
+<!-- Format: approach | evidence (N observations) | context -->
+<!-- Example: Code-first then theory → faster understanding (4 observations) | implementation topics -->
+<!-- Example: Analogies to real systems → high engagement (3 observations) | new abstract concepts -->
+
+None yet — will be populated as TAi discovers what works.
+
+### Approaches That Don't Work
+<!-- Format: approach | why it fails (N observations) | what to do instead -->
+<!-- Example: Extended Socratic on unfamiliar topics → frustration (2 observations) | use EXPLAIN first -->
+<!-- Example: Abstract definitions before examples → disengagement (3 observations) | start concrete -->
+
+None yet — will be populated as TAi discovers what to avoid.
+
+### Strategy Shift Patterns
+<!-- How this student's optimal approach changes with mastery level -->
+<!-- Example: LOW → needs analogies first, not questions. MEDIUM → responds well to Socratic. HIGH → loves edge-case challenges -->
+
+Not yet characterized.
 
 ## Mastery Scores
 
