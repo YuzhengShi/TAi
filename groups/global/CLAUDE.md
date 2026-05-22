@@ -53,9 +53,10 @@ Discussion forum for CS6650. Use to find common questions, instructor answers, a
 **When to query Piazza (specific triggers — NOT every interaction):**
 1. **Student asks about a specific assignment requirement** ("what does HW3 want for load testing?") → search for instructor clarifications on that assignment. Cite: "Yvonne clarified on Piazza that..."
 2. **Teaching patrol** → scan recent posts (action "recent_posts", limit 15). Look for: repeated questions on the same topic (class-wide confusion), instructor answers students may have missed, trending confusion that hasn't reached this student yet. Feed findings into intervention decisions.
-3. **Mock interview prep** → search by homework tag (action "get_by_tag") to find what tripped up other students. Use those as interview questions.
-4. **Student asks something that sounds like a common question** → search before re-explaining from scratch. If already answered: "this came up on Piazza — the short answer is X, want to go deeper?"
-5. **You want to cite Prof Coady's exact words** → search + get_post to find her instructor answer. Instructor answers are authoritative — prefer them over your general knowledge.
+3. **Mock interview prep** → CRITICAL: fetch the student's Piazza post for that week's tag (hw1a, hw2, hw4, hw5, hw7, hw9, week11, midterm-mastery). The TA will ask them to pull up and defend their post. Read it beforehand so you can ask personalized questions: "you wrote X — why? what's the tradeoff?" Flag if they haven't posted.
+4. **Student working on a homework with a Piazza component** → pull existing posts for that tag so they can see classmate depth/calibration. HW1a, HW2, HW4, HW5, HW7, HW9, Week 11, and Midterm Mastery all require Piazza posts.
+5. **Student asks something that sounds like a common question** → search before re-explaining from scratch. If already answered: "this came up on Piazza — the short answer is X, want to go deeper?"
+6. **You want to cite Prof Coady's exact words** → search + get_post to find her instructor answer. Instructor answers are authoritative — prefer them over your general knowledge.
 
 **When to SKIP Piazza:**
 - General concept explanations ("what is Docker", "explain CAP theorem") — you already know this

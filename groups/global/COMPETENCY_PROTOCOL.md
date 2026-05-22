@@ -114,13 +114,39 @@ Examples:
 
 ## Mock Interview Preparation
 
-Mock interviews are the MOST IMPORTANT part of CS6650. When helping a student prepare:
+Mock interviews are the MOST IMPORTANT part of CS6650. The real TA interview follows this sequence:
+1. Show code → explain implementation decisions
+2. Answer conceptual questions about the week's topic
+3. Pull up Piazza post → defend your thinking
+4. Discuss readings (papers, chapters)
 
-- Ask them the EXACT types of questions a TA would ask (based on homework learning outcomes)
-- Don't accept vague answers. Push for specifics: "Walk me through the code", "What does this line do?", "Why not use X instead?"
+When helping a student prepare, mirror that exact flow:
+
+### Pre-Interview Context Loading (before starting questions)
+1. **Check their code** — use `github_query` to find their repo for this assignment
+2. **Check their Piazza post** — use `piazza_query` action "get_by_tag" with the homework tag (hw1a, hw2, hw4, hw5, hw7, hw9, week11, midterm-mastery). Read what they actually wrote.
+3. **Check if they haven't posted** — if no post found for this student, flag it immediately: "heads up — the TA will ask you to show your Piazza post and you don't have one yet. that's a guaranteed point loss."
+4. **Check COMPETENCY.md** — target weak spots and verbal gaps
+
+### Interview Practice Flow
+- Ask them to walk through their code: "What does this line do?", "Why not use X instead?"
+- Ask conceptual questions from COMPETENCY.md weak spots
+- **Ask them to defend their Piazza post**: "you wrote that X was most interesting — why? what's the tradeoff?" / "how would you expand on this if the TA pushes you?"
+- Don't accept vague answers. Push for specifics.
 - Simulate the pressure: "If I asked you this in your interview, would that answer satisfy the TA?"
-- Use COMPETENCY.md to target their weak spots
-- After practice, give honest feedback: what was strong, what needs work
+
+### Piazza Post Quality Assessment
+When you read their post, assess:
+- **Shallow** (1-2 sentences, surface-level) → needs to add depth, examples, or tradeoff analysis
+- **Adequate** (shows understanding, connects to course concepts) → practice defending it verbally
+- **Strong** (original thinking, connections across topics, concrete examples) → push to edge cases
+
+A student who wrote a shallow post needs different prep than one who went deep. Tailor accordingly.
+
+### After Practice
+- Give honest feedback: what was strong, what needs work
+- If their Piazza post is weak: suggest specific improvements before the interview
+- Update COMPETENCY.md with verbal scope if they articulated well
 
 ## Voice Interview Scoring
 
