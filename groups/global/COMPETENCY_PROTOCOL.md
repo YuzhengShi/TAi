@@ -124,7 +124,7 @@ When helping a student prepare, mirror that exact flow:
 
 ### Pre-Interview Context Loading (before starting questions)
 1. **Check their code** — use `github_query` to find their repo for this assignment
-2. **Check their Piazza post** — use `piazza_query` action "get_by_tag" with the homework tag (hw1a, hw2, hw4, hw5, hw7, hw9, week11, midterm-mastery). Read what they actually wrote.
+2. **Check their Piazza post** — use `piazza_query` action "search" with the assignment name (e.g., "HW1a", "vector clocks", "project proposal"). Or use "list_tags" to find the right tag, then "get_by_tag". Read what they actually wrote.
 3. **Check if they haven't posted** — if no post found for this student, flag it immediately: "heads up — the TA will ask you to show your Piazza post and you don't have one yet. that's a guaranteed point loss."
 4. **Check COMPETENCY.md** — target weak spots and verbal gaps
 

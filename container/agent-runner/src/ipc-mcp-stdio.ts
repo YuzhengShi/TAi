@@ -695,14 +695,16 @@ Actions:
 - "get_post": Full post with all answers and follow-ups (params: post_id)
 - "search": Search posts by keyword (params: query)
 - "get_pinned": Instructor-pinned posts (announcements, resources)
-- "get_by_tag": Posts with a specific tag (params: tag — e.g., "hw1", "docker", "exam")
+- "get_by_tag": Posts with a specific tag (params: tag). Use "list_tags" first to discover available tags.
+- "list_tags": Discover all tags in use with post counts (call this first before get_by_tag)
 - "stats": Forum statistics (post count, student count)
 
 Use Piazza to:
 - Find common student questions about a topic (helps identify class-wide confusion)
 - Reference instructor answers when teaching ("as Prof Coady mentioned on Piazza...")
 - Check if a student's question was already answered
-- Understand what topics are generating the most discussion
+- Mock interview prep: search for the homework topic to find what tripped up students
+- Fetch a student's Piazza post to prepare personalized interview questions
 
 This tool does NOT count against the 3-tool-call search limit.`,
   {

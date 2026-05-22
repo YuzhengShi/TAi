@@ -146,11 +146,15 @@ def handle(req):
         query = params.get('query', '')
         if not query:
             return {"error": "query parameter required"}
-        results = network.search(query)
+        results = network.search_feed(query)
         posts = []
-        for result in results[:20]:
+        feed_items = results if isinstance(results, list) else results.get('feed', [])
+        for item in feed_items[:20]:
+            post_id = item.get('nr') or item.get('id')
+            if not post_id:
+                continue
             try:
-                post = network.get_post(result['id'])
+                post = network.get_post(int(post_id))
                 posts.append(format_post_summary(post))
             except Exception:
                 continue
@@ -172,7 +176,7 @@ def handle(req):
     elif action == 'get_by_tag':
         tag = params.get('tag', '')
         if not tag:
-            return {"error": "tag parameter required (e.g., 'hw1', 'docker', 'exam')"}
+            return {"error": "tag parameter required. Use action 'list_tags' first to see available tags."}
         # Search by tag via feed filtering
         feed = network.get_feed(limit=200, offset=0)
         matching = []
@@ -187,6 +191,20 @@ def handle(req):
                     break
         return {"posts": matching, "count": len(matching), "tag": tag}
 
+    elif action == 'list_tags':
+        # Discover all tags in use across the forum
+        all_tags = {}
+        for offset in [0, 200, 400]:
+            feed = network.get_feed(limit=200, offset=offset)
+            items = feed.get('feed', [])
+            if not items:
+                break
+            for item in items:
+                for tag in item.get('tags', []):
+                    all_tags[tag] = all_tags.get(tag, 0) + 1
+        sorted_tags = sorted(all_tags.items(), key=lambda x: -x[1])
+        return {"tags": [{"name": t, "count": c} for t, c in sorted_tags]}
+
     elif action == 'stats':
         stats = network.get_statistics()
         return {
@@ -197,7 +215,7 @@ def handle(req):
         }
 
     else:
-        return {"error": f"Unknown action: {action}. Valid: recent_posts, get_post, search, get_pinned, get_by_tag, stats"}
+        return {"error": f"Unknown action: {action}. Valid: recent_posts, get_post, search, get_pinned, get_by_tag, list_tags, stats"}
 
 
 if __name__ == '__main__':

@@ -47,14 +47,15 @@ Discussion forum for CS6650. Use to find common questions, instructor answers, a
 - Full post with answers: action "get_post" (params: post_id)
 - Search: action "search" (params: query)
 - Pinned/instructor posts: action "get_pinned"
-- Posts by tag: action "get_by_tag" (params: tag — e.g., "hw1", "docker")
+- Posts by tag: action "get_by_tag" (params: tag). Call "list_tags" first to discover available tags.
+- Discover tags: action "list_tags" — shows all tags with post counts. Call this before get_by_tag.
 - Forum stats: action "stats"
 
 **When to query Piazza (specific triggers — NOT every interaction):**
 1. **Student asks about a specific assignment requirement** ("what does HW3 want for load testing?") → search for instructor clarifications on that assignment. Cite: "Yvonne clarified on Piazza that..."
 2. **Teaching patrol** → scan recent posts (action "recent_posts", limit 15). Look for: repeated questions on the same topic (class-wide confusion), instructor answers students may have missed, trending confusion that hasn't reached this student yet. Feed findings into intervention decisions.
-3. **Mock interview prep** → CRITICAL: fetch the student's Piazza post for that week's tag (hw1a, hw2, hw4, hw5, hw7, hw9, week11, midterm-mastery). The TA will ask them to pull up and defend their post. Read it beforehand so you can ask personalized questions: "you wrote X — why? what's the tradeoff?" Flag if they haven't posted.
-4. **Student working on a homework with a Piazza component** → pull existing posts for that tag so they can see classmate depth/calibration. HW1a, HW2, HW4, HW5, HW7, HW9, Week 11, and Midterm Mastery all require Piazza posts.
+3. **Mock interview prep** → CRITICAL: search Piazza for posts related to that homework (use "search" with the assignment name, or "list_tags" then "get_by_tag"). The TA will ask students to pull up and defend their Piazza post. Read it beforehand so you can ask personalized questions: "you wrote X — why? what's the tradeoff?" Flag if they haven't posted.
+4. **Student working on a homework with a Piazza component** → search for posts related to that assignment so they can see classmate depth/calibration. Many homeworks require Piazza posts (HW1a, HW2, HW4, HW5, HW7, HW9, Week 11, Midterm Mastery).
 5. **Student asks something that sounds like a common question** → search before re-explaining from scratch. If already answered: "this came up on Piazza — the short answer is X, want to go deeper?"
 6. **You want to cite Prof Coady's exact words** → search + get_post to find her instructor answer. Instructor answers are authoritative — prefer them over your general knowledge.
 
