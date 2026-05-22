@@ -41,7 +41,23 @@ Read-only access to student code repos. Use for code review, commit history, and
 - Read a file: action "file_content" with owner, repo, path
 - NEVER share one student's code with another student
 
-Canvas and GitHub queries do NOT count against the 3-tool-call search limit.
+### Piazza (`piazza_query`)
+Discussion forum for CS6650. Use to find common questions, instructor answers, and class discussion.
+- Recent posts: action "recent_posts" (params: limit)
+- Full post with answers: action "get_post" (params: post_id)
+- Search: action "search" (params: query)
+- Pinned/instructor posts: action "get_pinned"
+- Posts by tag: action "get_by_tag" (params: tag — e.g., "hw1", "docker")
+- Forum stats: action "stats"
+
+When to use Piazza:
+- Student asks a question that's likely already been answered on the forum → search first
+- You want to ground your response in what Prof Coady has already said → reference instructor answers
+- Teaching patrol: check recent posts to detect class-wide confusion on a topic
+- Mock interview prep: find what questions students are asking about the assignment
+- NEVER reveal one student's private Piazza post to another student
+
+Canvas, GitHub, and Piazza queries do NOT count against the 3-tool-call search limit.
 
 ### Course Status (Auto-Synced)
 A background task syncs Canvas and GitHub data every 6 hours and writes `/workspace/global/COURSE_STATUS.md`. This file contains: assignment list with due dates, student submission status, GitHub activity, external resource summaries, and alerts. During teaching patrol, read this file instead of querying Canvas/GitHub directly. For real-time queries (student asks "did I submit?"), use `canvas_query` directly.

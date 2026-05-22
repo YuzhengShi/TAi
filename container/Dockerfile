@@ -45,7 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/leanrag \
     && /opt/leanrag/bin/pip install --no-cache-dir \
-        boto3 networkx numpy python-dotenv "mcp[cli]" requests python-docx pymupdf openpyxl python-pptx
+        boto3 networkx numpy python-dotenv "mcp[cli]" requests python-docx pymupdf openpyxl python-pptx piazza-api
 
 # Install agent-browser, claude-code, and mermaid-cli globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code @mermaid-js/mermaid-cli

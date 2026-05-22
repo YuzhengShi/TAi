@@ -37,6 +37,7 @@ const hasFullAccess = isMain || isScheduledTask;
 const RATE_LIMITS: Record<string, number> = {
   canvas_query: 30,
   github_query: 30,
+  piazza_query: 20,
   generate_teaching_image: 5,
   send_voice_message: 10,
   render_diagram: 10,
@@ -679,6 +680,64 @@ This tool does NOT count against the 3-tool-call search limit.`,
       const stderr = (err as { stderr?: Buffer })?.stderr?.toString() || '';
       const msg = stdout || stderr || (err instanceof Error ? err.message : String(err));
       return { content: [{ type: 'text' as const, text: `GitHub query failed: ${msg.slice(-1000)}` }], isError: true };
+    }
+  },
+);
+
+// --- Piazza Integration ---
+
+server.tool(
+  'piazza_query',
+  `Query Piazza discussion forum for CS6650 (read-only). Use to find student questions, instructor answers, and discussion threads.
+
+Actions:
+- "recent_posts": Latest posts (params: limit? — default 20, max 50)
+- "get_post": Full post with all answers and follow-ups (params: post_id)
+- "search": Search posts by keyword (params: query)
+- "get_pinned": Instructor-pinned posts (announcements, resources)
+- "get_by_tag": Posts with a specific tag (params: tag — e.g., "hw1", "docker", "exam")
+- "stats": Forum statistics (post count, student count)
+
+Use Piazza to:
+- Find common student questions about a topic (helps identify class-wide confusion)
+- Reference instructor answers when teaching ("as Prof Coady mentioned on Piazza...")
+- Check if a student's question was already answered
+- Understand what topics are generating the most discussion
+
+This tool does NOT count against the 3-tool-call search limit.`,
+  {
+    action: z.string().describe('Piazza action to perform'),
+    params: z.record(z.string(), z.string()).optional().describe('Action parameters (e.g., post_id, query, tag, limit)'),
+  },
+  async (args) => {
+    const rl = checkRateLimit('piazza_query');
+    if (rl) return { content: [{ type: 'text' as const, text: rl }], isError: true };
+
+    if (!process.env.PIAZZA_EMAIL || !process.env.PIAZZA_PASSWORD) {
+      return { content: [{ type: 'text' as const, text: 'Piazza not configured: PIAZZA_EMAIL and PIAZZA_PASSWORD not set in .env' }], isError: true };
+    }
+    if (!process.env.PIAZZA_NETWORK_ID) {
+      return { content: [{ type: 'text' as const, text: 'Piazza not configured: PIAZZA_NETWORK_ID not set in .env' }], isError: true };
+    }
+
+    try {
+      const result = execSync('/opt/leanrag/bin/python3 /opt/scripts/piazza_api.py', {
+        input: JSON.stringify({ action: args.action, params: args.params || {} }),
+        maxBuffer: 5 * 1024 * 1024,
+        timeout: 30000,
+        env: {
+          ...process.env,
+          PIAZZA_EMAIL: process.env.PIAZZA_EMAIL,
+          PIAZZA_PASSWORD: process.env.PIAZZA_PASSWORD,
+          PIAZZA_NETWORK_ID: process.env.PIAZZA_NETWORK_ID,
+        },
+      });
+      return { content: [{ type: 'text' as const, text: result.toString() }] };
+    } catch (err: unknown) {
+      const stdout = (err as { stdout?: Buffer })?.stdout?.toString() || '';
+      const stderr = (err as { stderr?: Buffer })?.stderr?.toString() || '';
+      const msg = stdout || stderr || (err instanceof Error ? err.message : String(err));
+      return { content: [{ type: 'text' as const, text: `Piazza query failed: ${msg.slice(-1000)}` }], isError: true };
     }
   },
 );

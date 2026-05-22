@@ -282,6 +282,9 @@ async function readSecrets(useLight = false): Promise<Record<string, string>> {
     'GITHUB_ALLOWED_ORGS',
     'MS_EMAIL',
     'MS_PASSWORD',
+    'PIAZZA_EMAIL',
+    'PIAZZA_PASSWORD',
+    'PIAZZA_NETWORK_ID',
   ]);
 
   // Fall back to process.env for AWS credentials (e.g. AWS sandbox/EC2 roles)
