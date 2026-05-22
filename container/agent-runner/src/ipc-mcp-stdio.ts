@@ -721,7 +721,7 @@ This tool does NOT count against the 3-tool-call search limit.`,
     }
 
     try {
-      const result = execSync('/opt/leanrag/bin/python3 /opt/scripts/piazza_api.py', {
+      const result = execSync('/opt/leanrag/bin/python3 /opt/scripts/piazza_query.py', {
         input: JSON.stringify({ action: args.action, params: args.params || {} }),
         maxBuffer: 5 * 1024 * 1024,
         timeout: 30000,

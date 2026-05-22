@@ -9,6 +9,9 @@ This directory contains development state files that persist across conversation
 | `progress.md` | What's done, in progress, and remaining | Start of every conversation |
 | `activeContext.md` | Current focus, recent decisions, immediate next steps | Start of every conversation |
 | `systemPatterns.md` | Architecture, data flow, design patterns | When modifying code or architecture |
+| `ec2-deployment.md` | EC2 instance details, systemd, deploy workflow, secrets | When deploying, debugging EC2, or changing infra |
+| `voice-system.md` | Voice notes (in/out) + mock interview (Nova Sonic, echo fix, Shadow Evaluator) | When modifying voice features |
+| `deepgram-voice-design.md` | Deepgram Voice Agent migration design (replaces Nova Sonic) | When implementing the Deepgram migration |
 
 ## Rules
 
