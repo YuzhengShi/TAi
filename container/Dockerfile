@@ -47,6 +47,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && /opt/leanrag/bin/pip install --no-cache-dir \
         boto3 networkx numpy python-dotenv "mcp[cli]" requests python-docx pymupdf openpyxl python-pptx piazza-api
 
+# Install LeanRAG dependencies for build_graph
+COPY leanrag/requirements.txt /tmp/leanrag-requirements.txt
+RUN /opt/leanrag/bin/pip install --no-cache-dir -r /tmp/leanrag-requirements.txt
+
 # Install agent-browser, claude-code, and mermaid-cli globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code @mermaid-js/mermaid-cli
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
