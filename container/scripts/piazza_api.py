@@ -1,3 +1,4 @@
+#!/opt/leanrag/bin/python3
 """Piazza API helper — reads JSON request from stdin, returns JSON to stdout.
 
 Uses the unofficial piazza-api library. Requires PIAZZA_EMAIL and PIAZZA_PASSWORD
